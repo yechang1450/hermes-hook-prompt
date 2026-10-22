@@ -51,7 +51,8 @@
   <rect class="box" x="16" y="330" width="122" height="94"/>
   <text x="28" y="352" class="t k dim">INJECTIONS</text>
   <text x="28" y="376" class="t ok v">1,284</text>
-  <text x="28" y="398" class="t k dim">SKIPPED  expired 3</text>
+  <text x="28" y="396" class="t k dim">SKIPPED</text>
+  <text x="28" y="412" class="t k dim">expired 3</text>
 
   <!-- 右侧：规则清单 -->
   <rect class="box" x="742" y="70" width="122" height="240"/>
