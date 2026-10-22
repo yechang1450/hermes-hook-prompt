@@ -144,13 +144,13 @@ python hud_report.py --since 2026-10-22
 
 ## 六、测试
 
-29 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+32 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检 / 报告统计与参数校验。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
+覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符）/ UTC 到期按本地显示 / 报告统计与参数校验。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
 
 ## 七、边界与安全（先说清楚）
 
@@ -172,7 +172,7 @@ python -m unittest discover -s tests -v
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/test_hud.py` | 29 个单元测试（标准库 unittest） |
+| `tests/test_hud.py` | 32 个单元测试（标准库 unittest） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
