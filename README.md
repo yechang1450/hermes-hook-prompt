@@ -180,11 +180,11 @@ python -m unittest discover -s tests -v
 
 ## 九、灵感：I, Robot 里那个「眼前全是要点」的机器人
 
-《我，机器人》（2004）里，斯普纳在兰宁博士家调查时，门外那台 **USR 拆除机器人（demolition robot，serial 9-4）** 扫描时会自报身份与工单：
+《我，机器人》（2004）里，斯普纳在兰宁博士家调查时，门外那台 **USR 拆除机器人**扫描时会自报身份与工单：
 
-> Identify. USR, demolition robot, serial 9-4. Demolition scheduled for 8 a.m. tomorrow.
+> Identify. USR, demolition robot, series 9-4. Demolition scheduled for 8 a.m. tomorrow.
 
-它不需要「回忆」自己的任务边界——这些信息一直在它的工作视图里。
+型号是 **9-4**（不同字幕版本写作 series 9-4 / serial 9-4）。它不需要「回忆」自己的任务边界——这些信息一直在它的工作视图里。
 
 这套东西就是那个 HUD 的极简版：**不靠记忆，不靠自觉回忆，每轮重新摆在模型眼前**。
 
