@@ -10,7 +10,7 @@
 
 ## 一、它用的是哪些官方机制，各自到底干什么
 
-Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明 **shell hook**：在 Agent 生命周期的固定节点上，调用一个本地命令，把该节点的上下文以 JSON 从 stdin 交给它，再读它的 stdout 决定下一步。完整事件清单（v0.22.2）：
+Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明 **shell hook**：在 Agent 生命周期的固定节点上，调用一个本地命令，把该节点的上下文以 JSON 从 stdin 交给它，再读它的 stdout 决定下一步。主要事件（v0.22.2）：
 
 | 事件 | 触发时机 | 能做什么 |
 |---|---|---|
@@ -18,7 +18,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 | `post_llm_call` | 每轮模型返回之后 | 观察 |
 | `pre_tool_call` | 每次工具调用之前 | **能拦**：`{"decision":"block","reason":"…"}` 或 exit 2 |
 | `post_tool_call` | 工具返回之后 | 观察 |
-| `pre_verify` | 交付前校验阶段 | 观察 / 干预 |
+| `pre_verify` | 交付/验证阶段（带 final_response、changed_paths、attempt） | 观察 / 干预 |
 | `on_session_start` / `on_session_end` / `on_session_finalize` / `on_session_reset` | 会话生命周期 | 观察 / 初始化 |
 | `pre_api_request` 等 | 每次 API 请求前后 | 观察 |
 
@@ -47,6 +47,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 ## 二、安装
 
 要求：Python 3.9+（只用标准库），Hermes 能正常启动。仓库＝三个脚本 + 一份面板样例。
+实测环境：Windows 11、Hermes v0.22.2、Python 3.14.7。
 
 ```bash
 git clone <this-repo> hermes-hook-prompt
@@ -66,7 +67,7 @@ hermes -p <profile> config set --force hooks.pre_llm_call \
   '[{"command":"python C:/path/to/hermes-hook-prompt/hud_inject.py","timeout":10}]'
 ```
 
-记录同意（非交互；不加这条钩子会被跳过）：
+记录同意（非交互；不加这条钩子会被跳过；default 档去掉 `-p <profile>`）：
 
 ```bash
 hermes -p <profile> --accept-hooks -z "ok"
@@ -93,7 +94,7 @@ enabled: true                                  # off 即暂停，不用删配置
 （空行之后是正文，原样注入）
 ```
 
-正文建议控制在 **1000 字以内**（脚本硬上限 1600 字，超出截断）。按 ¥2/百万 token 粗算，1000 字每轮约 0.7k token ≈ **¥0.0014/轮**。
+正文建议控制在 **1000 字以内**（脚本硬上限 1600 字，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，本机实测约 60ms。
 
 ---
 
