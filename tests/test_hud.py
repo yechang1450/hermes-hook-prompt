@@ -100,7 +100,7 @@ class HudCase(unittest.TestCase):
     # ---- hudctl ---------------------------------------------------
     def run_ctl(self, *args):
         return subprocess.run([sys.executable, str(self.dir / "hudctl.py"), *args],
-                              capture_output=True, text=True, cwd=self.dir, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=self.dir, timeout=60)
 
     def test_ctl_off_on(self):
         self.write_panel()
@@ -144,7 +144,6 @@ class HudCase(unittest.TestCase):
     def test_ctl_snapshot_restore(self):
         self.write_panel(body="快照正文")
         self.run_ctl("snapshot")
-        self.run_ctl("set", "--ttl", "1h", "--body", os.devnull) if False else None
         self.write_panel(body="改过的")
         r = self.run_ctl("restore", "latest", "--ttl", "1h")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -159,7 +158,7 @@ class HudCase(unittest.TestCase):
         self.inject(profile="default")
         env = dict(os.environ, HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
-                           capture_output=True, text=True, env=env, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 0)
         self.assertIn("default", r.stdout)
         self.assertIn("inject", self.log.read_text(encoding="utf-8"))
@@ -167,14 +166,14 @@ class HudCase(unittest.TestCase):
     def test_report_bad_since(self):
         env = dict(os.environ, HUD_LOG=str(self.log))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py"), "--since", "10-22"],
-                           capture_output=True, text=True, env=env, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 2)
         self.assertIn("YYYY-MM-DD", r.stdout)
 
     def test_report_missing_log(self):
         env = dict(os.environ, HUD_LOG=str(self.dir / "absent.log"))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
-                           capture_output=True, text=True, env=env, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 1)
 
 
