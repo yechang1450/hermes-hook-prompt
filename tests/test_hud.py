@@ -122,7 +122,8 @@ class HudCase(unittest.TestCase):
         self.write_panel()
         r = self.run_ctl("restore", "../../etc/passwd")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("日期格式", r.stdout + r.stderr)
+        # stderr 在极端代码页下可能被转义成 \uXXXX，所以断言稳定的 ASCII 片段
+        self.assertIn("YYYY-MM-DD", (r.stdout or "") + (r.stderr or ""))
 
     def test_ctl_creates_panel_from_example(self):
         self.run_ctl("status")  # 面板不存在 → 自动从样例复制

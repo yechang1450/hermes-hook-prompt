@@ -28,11 +28,12 @@ ROOT = Path(__file__).resolve().parent
 PANEL = ROOT / "panel.md"
 SNAPS = ROOT / "snapshots"
 CST = timezone(timedelta(hours=8))
-try:
-    if not sys.stdout.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if not _stream.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 TTL_RE = re.compile(r"^(\d+(?:\.\d+)?)([mhd])$")
 

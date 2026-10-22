@@ -23,11 +23,12 @@ ROOT = Path(__file__).resolve().parent
 LOG = Path(os.environ.get("HUD_LOG") or (ROOT / "hud.log"))
 PANEL = Path(os.environ.get("HUD_PANEL") or (ROOT / "panel.md"))
 
-try:
-    if not sys.stdout.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if not _stream.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 LINE = re.compile(r"^(?P<ts>[\d\-T:+]+)\s+(?P<kind>inject|skip)\s+(?P<rest>.*)$")
 
