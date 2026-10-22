@@ -154,7 +154,11 @@ def main() -> int:
         return 0
     title = meta.get("title", "会话面板")
     stamp = expires.astimezone(CST).strftime("%m-%d %H:%M")
-    block = f"[HUD·{title}] 生效至 {stamp}（{profile or 'default'}）\n{body}"
+    who = profile or "default"
+    hint = ("default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
+            if who == "default" else
+            f"{who} bot：优先用 OTUI（build/open-tui-orchestrator）")
+    block = f"[HUD·{title}] 生效至 {stamp}（{who}）\n{body}\n\n执行机制建议：{hint}"
     if len(block) > MAX_CHARS:
         block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"
     log(f"inject session={session_id} profile={profile} chars={len(block)}")

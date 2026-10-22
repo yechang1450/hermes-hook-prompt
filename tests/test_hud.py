@@ -246,6 +246,14 @@ class HudCase(unittest.TestCase):
         ctx = self.context(self.inject()[1])
         self.assertIn("01-01 08:00", ctx.splitlines()[0])
 
+
+    def test_execution_hint_by_profile(self):
+        self.write_panel()
+        ctx_default = self.context(self.inject(profile="default")[1])
+        self.assertIn("default bot：优先用 Hermes 官方机制", ctx_default)
+        ctx_bot = self.context(self.inject(profile="proj-80")[1])
+        self.assertIn("proj-80 bot：优先用 OTUI", ctx_bot)
+
     def test_ctl_sessions_and_use(self):
         home = self.dir / "home"
         home.mkdir()

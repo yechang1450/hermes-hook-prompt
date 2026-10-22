@@ -102,6 +102,8 @@ enabled: true                                  # off 即暂停，不用删配置
 
 ## 四、日常操作（`hudctl.py`）
 
+注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向 OTUI（`build/open-tui-orchestrator`）。
+
 ```bash
 python hudctl.py status                     # 范围、到期、剩多久、正文字数
 python hudctl.py set --ttl 12h --body b.md  # 换正文并续期（不给 --body 就读 stdin）
@@ -144,7 +146,7 @@ python hud_report.py --since 2026-10-22
 
 ## 六、测试
 
-32 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+33 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -172,7 +174,7 @@ python -m unittest discover -s tests -v
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/test_hud.py` | 32 个单元测试（标准库 unittest） |
+| `tests/test_hud.py` | 33 个单元测试（标准库 unittest） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
