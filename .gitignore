@@ -1,0 +1,8 @@
+panel.md
+hud.log
+snapshots/
+_retired/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

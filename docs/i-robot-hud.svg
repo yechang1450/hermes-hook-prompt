@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 500" width="880" height="500" role="img" aria-label="机器人第一视角：画面四周一圈要点信息">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#060a10"/>
+      <stop offset="1" stop-color="#0d1520"/>
+    </linearGradient>
+    <linearGradient id="scene" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2735"/>
+      <stop offset="1" stop-color="#0a1018"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .t { font-family: "Segoe UI", "Consolas", monospace; fill: #8fe3ff; }
+      .dim { fill: #4e7a91; }
+      .warn { fill: #ffb347; }
+      .ok { fill: #7dffb0; }
+      .box { fill: rgba(10,20,30,.72); stroke: #1f4a5e; stroke-width: 1; rx: 6; }
+      .k { font-size: 11px; letter-spacing: .14em; }
+      .v { font-size: 13px; }
+    </style>
+  </defs>
+
+  <rect width="880" height="500" fill="url(#bg)"/>
+
+  <!-- 中央视野：画面本体 -->
+  <rect x="150" y="86" width="580" height="328" rx="10" fill="url(#scene)" stroke="#20455a"/>
+  <path d="M150 300 L300 250 L380 300 L520 214 L730 300 L730 414 L150 414 Z" fill="#0e1a24" opacity=".85"/>
+  <circle cx="470" cy="210" r="26" fill="#16283a" stroke="#2b5d75"/>
+  <rect x="440" y="250" width="64" height="96" rx="8" fill="#16283a" stroke="#2b5d75"/>
+  <text x="440" y="386" class="t dim" font-size="11" letter-spacing=".2em">PRIMARY VIEW</text>
+
+  <!-- 四角括号 -->
+  <g stroke="#2f7d96" stroke-width="2" fill="none" filter="url(#glow)">
+    <path d="M150 116 L150 86 L180 86"/>
+    <path d="M700 86 L730 86 L730 116"/>
+    <path d="M150 384 L150 414 L180 414"/>
+    <path d="M700 414 L730 414 L730 384"/>
+  </g>
+
+  <!-- 左侧面板：会话与时效 -->
+  <rect class="box" x="16" y="70" width="122" height="104"/>
+  <text x="28" y="92" class="t k dim">SESSION</text>
+  <text x="28" y="112" class="t v">any</text>
+  <text x="28" y="136" class="t k dim">EXPIRES</text>
+  <text x="28" y="156" class="t v">12-31 07:00</text>
+
+  <!-- 左下：注入统计 -->
+  <rect class="box" x="16" y="330" width="122" height="94"/>
+  <text x="28" y="352" class="t k dim">INJECTIONS</text>
+  <text x="28" y="376" class="t ok v">1,284</text>
+  <text x="28" y="398" class="t k dim">SKIPPED  expired 3</text>
+
+  <!-- 右侧：规则清单 -->
+  <rect class="box" x="742" y="70" width="122" height="240"/>
+  <text x="754" y="92" class="t k dim">HARD RULES</text>
+  <g class="t" font-size="11">
+    <text x="754" y="116" class="ok">01 decide</text>
+    <text x="754" y="136" class="ok">02 official</text>
+    <text x="754" y="156" class="ok">03 mechanisms</text>
+    <text x="754" y="176" class="ok">04 refine memo</text>
+    <text x="754" y="196" class="warn">05 no popups</text>
+    <text x="754" y="216" class="warn">06 red lines</text>
+    <text x="754" y="248" class="dim" font-size="10">soft reminder ·</text>
+    <text x="754" y="262" class="dim" font-size="10">not enforcement</text>
+  </g>
+
+  <!-- 右下：钩子状态 -->
+  <rect class="box" x="742" y="330" width="122" height="94"/>
+  <text x="754" y="352" class="t k dim">HOOK</text>
+  <text x="754" y="372" class="t v">pre_llm_call</text>
+  <text x="754" y="396" class="t ok" font-size="12">● active</text>
+
+  <!-- 顶部标题条 -->
+  <rect x="150" y="52" width="580" height="22" fill="none"/>
+  <text x="150" y="66" class="t k dim">HERMES · EVERY TURN, IN FRONT OF THE MODEL</text>
+</svg>
