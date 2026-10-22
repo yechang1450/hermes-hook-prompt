@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hud_report.py —— 按档/按天统计 HUD 注入情况，回答「这轮到底有没有生效」。
+"""hud_report.py —— 按档统计 HUD 注入情况，回答「这轮到底有没有生效」。
 
 读 hud.log（每轮一行），输出：
   · 每个 profile 注入次数、跳过次数（会话不匹配 / 过期 / 关闭）
@@ -13,13 +13,21 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import sys
 from collections import Counter, defaultdict
-from datetime import datetime
 from pathlib import Path
 
-LOG = Path(__file__).resolve().parent / "hud.log"
-PANEL = Path(__file__).resolve().parent / "panel.md"
+ROOT = Path(__file__).resolve().parent
+LOG = Path(os.environ.get("HUD_LOG") or (ROOT / "hud.log"))
+PANEL = Path(os.environ.get("HUD_PANEL") or (ROOT / "panel.md"))
+
+try:
+    if not sys.stdout.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 LINE = re.compile(r"^(?P<ts>[\d\-T:+]+)\s+(?P<kind>inject|skip)\s+(?P<rest>.*)$")
 
@@ -29,6 +37,9 @@ def main() -> int:
     ap.add_argument("--since", default="")
     args = ap.parse_args()
     since = args.since.strip()
+    if since and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+        print(f"--since 需要 YYYY-MM-DD：{since}")
+        return 2
 
     if not LOG.exists():
         print(f"没有日志：{LOG}")
@@ -49,7 +60,8 @@ def main() -> int:
         if since and ts[:10] < since:
             continue
         total += 1
-        prof = (re.search(r"profile=(\S+)", rest) or [None, "?"])[1]
+        mprof = re.search(r"profile=(\S+)", rest)
+        prof = mprof.group(1) if mprof else "-"
         if kind == "inject":
             inj[prof] += 1
             first.setdefault(prof, ts)

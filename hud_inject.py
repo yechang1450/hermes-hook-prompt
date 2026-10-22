@@ -25,12 +25,24 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PANEL = os.environ.get("HUD_PANEL", os.path.join(ROOT, "panel.md"))
 LOG = os.environ.get("HUD_LOG", os.path.join(ROOT, "hud.log"))
 CST = timezone(timedelta(hours=8))
+try:
+    if not sys.stdout.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 MAX_CHARS = 1600
+MAX_LOG_BYTES = 1_000_000
 
 
 def log(line: str) -> None:
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        try:
+            if os.path.getsize(LOG) > MAX_LOG_BYTES:
+                os.replace(LOG, LOG + ".1")
+        except OSError:
+            pass
         with open(LOG, "a", encoding="utf-8") as fh:
             fh.write(f"{datetime.now(CST).isoformat(timespec='seconds')} {line}\n")
     except Exception:
@@ -62,10 +74,11 @@ def main() -> int:
     profile = str(payload.get("profile") or "")
     try:
         with open(PANEL, encoding="utf-8") as fh:
-            text = fh.read()
-    except FileNotFoundError:
+            text = fh.read(200_000)  # 面板不该有这么大；上限防误放巨型文件
+    except OSError:
         log(f"skip no-panel session={session_id} profile={profile}")
         return 0
+    text = text.lstrip("\ufeff")
     meta, body = parse_panel(text)
     if meta.get("enabled", "true").lower() in {"0", "false", "no", "off"}:
         log(f"skip disabled session={session_id}")
@@ -75,7 +88,10 @@ def main() -> int:
         log(f"skip other-session scope={scope} session={session_id}")
         return 0
     try:
-        expires = datetime.fromisoformat(meta.get("expires_at", ""))
+        raw = meta.get("expires_at", "").strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        expires = datetime.fromisoformat(raw)
     except Exception:
         log(f"skip bad-expiry meta={meta.get('expires_at')!r}")
         return 0

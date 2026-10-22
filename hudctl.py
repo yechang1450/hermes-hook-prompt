@@ -5,6 +5,7 @@
 其后是注入正文。pre_llm_call 钩子每轮读它；本脚本只负责**人来操作**：
 
     python hudctl.py status                  # 看当前面板：作用范围、到期时间、剩多久
+    python hudctl.py check                   # 校验格式（缺元数据/到期写错/正文超长/已过期）
     python hudctl.py set --ttl 12h           # 换正文并续期（正文从 --body 文件或 stdin 读）
     python hudctl.py off / on                # 暂停 / 恢复注入（不删面板）
     python hudctl.py snapshot                # 存一份当天的快照到 snapshots/
@@ -27,6 +28,12 @@ ROOT = Path(__file__).resolve().parent
 PANEL = ROOT / "panel.md"
 SNAPS = ROOT / "snapshots"
 CST = timezone(timedelta(hours=8))
+try:
+    if not sys.stdout.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 TTL_RE = re.compile(r"^(\d+(?:\.\d+)?)([mhd])$")
 
 
@@ -36,6 +43,17 @@ def parse_ttl(text: str) -> timedelta:
         raise SystemExit(f"TTL 写法不认：{text}（例：30m / 12h / 2d）")
     value, unit = float(m.group(1)), m.group(2)
     return timedelta(minutes=value) if unit == "m" else timedelta(hours=value) if unit == "h" else timedelta(days=value)
+
+
+def parse_expiry(raw: str):
+    """接受 ISO8601；容忍结尾 Z。解析失败返回 None。"""
+    raw = (raw or "").strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
 
 
 def split_panel(text: str) -> tuple[dict[str, str], str]:
@@ -55,18 +73,39 @@ def split_panel(text: str) -> tuple[dict[str, str], str]:
 
 def read_panel() -> tuple[dict[str, str], str]:
     if not PANEL.exists():
-        raise SystemExit(f"面板不存在：{PANEL}")
-    return split_panel(PANEL.read_text(encoding="utf-8"))
+        sample = ROOT / "panel.example.md"
+        if sample.exists():
+            PANEL.write_text(sample.read_text(encoding="utf-8").lstrip("\ufeff"), encoding="utf-8")
+            print(f"（面板不存在，已从 panel.example.md 复制：{PANEL}）")
+        else:
+            raise SystemExit(f"面板不存在：{PANEL}（先 cp panel.example.md panel.md）")
+    return split_panel(PANEL.read_text(encoding="utf-8").lstrip("\ufeff"))
 
 
 def write_panel(meta: dict[str, str], body: str) -> None:
-    head = "\n".join(f"{k}: {meta[k]}" for k in ("session_id", "expires_at", "title", "enabled") if k in meta)
+    meta = dict(meta)
+    meta.setdefault("session_id", "any")
+    meta.setdefault("title", "会话面板")
+    meta.setdefault("enabled", "true")
+    if "expires_at" not in meta:
+        raise SystemExit("面板缺少 expires_at，无法写入（先补一行到期时间）")
+    head = "\n".join(f"{k}: {meta[k]}" for k in ("session_id", "expires_at", "title", "enabled"))
     PANEL.write_text(f"{head}\n\n{body}\n", encoding="utf-8")
 
 
+def _hermes_home() -> Path:
+    """HERMES_HOME → %LOCALAPPDATA%/hermes → ~/.local/share/hermes（跨平台兜底）。"""
+    env = os.environ.get("HERMES_HOME")
+    if env:
+        return Path(env)
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "hermes"
+    return Path.home() / ".local" / "share" / "hermes"
+
+
 def _state_db() -> Path:
-    home = Path(os.environ.get("HERMES_HOME") or (Path(os.environ["LOCALAPPDATA"]) / "hermes"))
-    return home / "state.db"
+    return _hermes_home() / "state.db"
 
 
 def cmd_sessions(args) -> int:
@@ -76,11 +115,18 @@ def cmd_sessions(args) -> int:
     if not db.exists():
         raise SystemExit(f"找不到会话库：{db}")
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    rows = con.execute(
-        "select id, title, profile_name, last_activity_at, message_count from sessions "
-        "where coalesce(archived,0)=0 and coalesce(hidden,0)=0 and id not like 'cron_%' "
-        "order by last_activity_at desc limit ?", (args.limit,)
-    ).fetchall()
+    try:
+        rows = con.execute(
+            "select id, title, profile_name, last_activity_at, message_count from sessions "
+            "where coalesce(archived,0)=0 and coalesce(hidden,0)=0 and id not like 'cron_%' "
+            "order by last_activity_at desc limit ?", (args.limit,)
+        ).fetchall()
+    except sqlite3.Error:
+        # 老版本/改过 schema 的库：退回最小列集
+        rows = con.execute(
+            "select id, title, null, last_activity_at, 0 from sessions "
+            "order by last_activity_at desc limit ?", (args.limit,)
+        ).fetchall()
     print(f"{'会话 id':<26} {'档':<12} {'消息':>4}  最后活动     标题")
     for sid, title, prof, ts, n in rows:
         when = datetime.fromtimestamp(ts, CST).strftime("%m-%d %H:%M") if ts else "-"
@@ -116,10 +162,7 @@ def cmd_use(args) -> int:
 
 def cmd_status(_args) -> int:
     meta, body = read_panel()
-    try:
-        expires = datetime.fromisoformat(meta.get("expires_at", ""))
-    except ValueError:
-        expires = None
+    expires = parse_expiry(meta.get("expires_at", ""))
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     now = datetime.now(CST)
@@ -153,6 +196,49 @@ def cmd_set(args) -> int:
     return 0
 
 
+META_KEYS = ("session_id", "expires_at", "title", "enabled")
+
+
+def cmd_check(_args) -> int:
+    """校验面板格式；有问题返回 1，方便放进门禁/CI。"""
+    problems = []
+    if not PANEL.exists():
+        print(f"✗ 面板不存在：{PANEL}")
+        return 1
+    raw = PANEL.read_text(encoding="utf-8")
+    if raw.startswith("\ufeff"):
+        problems.append("文件带 BOM（注入端能容忍，但建议去掉）")
+    meta, body = split_panel(raw.lstrip("\ufeff"))
+    for key in META_KEYS:
+        if key not in meta:
+            problems.append(f"缺少元数据：{key}")
+    scope = meta.get("session_id", "")
+    if scope and scope not in {"any", "*"} and len(scope) < 8:
+        problems.append(f"session_id 看起来不像会话 id：{scope!r}")
+    enabled = meta.get("enabled", "true").lower()
+    if enabled not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
+        problems.append(f"enabled 取值不合法：{meta.get('enabled')!r}")
+    expires = parse_expiry(meta.get("expires_at", ""))
+    if expires is None:
+        problems.append(f"expires_at 无法解析：{meta.get('expires_at')!r}")
+    else:
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=CST)
+        if expires <= datetime.now(CST):
+            problems.append(f"面板已过期：{meta.get('expires_at')}（注入会被跳过）")
+    if not body:
+        problems.append("正文为空")
+    if len(body) > 1600:
+        problems.append(f"正文 {len(body)} 字，超过注入上限 1600（会被截断）")
+    if problems:
+        print("✗ 面板有问题：")
+        for p in problems:
+            print("  - " + p)
+        return 1
+    print(f"✓ 面板正常：范围={scope or 'any'} 到期={meta['expires_at']} 正文={len(body)} 字")
+    return 0
+
+
 def cmd_toggle(flag: str):
     def run(_args) -> int:
         meta, body = read_panel()
@@ -174,6 +260,8 @@ def cmd_snapshot(_args) -> int:
 
 def cmd_restore(args) -> int:
     SNAPS.mkdir(exist_ok=True)
+    if args.date != "latest" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+        raise SystemExit(f"日期格式应为 YYYY-MM-DD 或 latest：{args.date}")
     snaps = sorted(SNAPS.glob("*.md"))
     if not snaps:
         raise SystemExit("没有快照可恢复")
@@ -219,6 +307,7 @@ def main() -> int:
     p_set.add_argument("--title")
     p_set.add_argument("--body", help="正文文件路径；不给则读 stdin")
     p_set.set_defaults(func=cmd_set)
+    sub.add_parser("check").set_defaults(func=cmd_check)
     sub.add_parser("off").set_defaults(func=cmd_toggle("false"))
     sub.add_parser("on").set_defaults(func=cmd_toggle("true"))
     sub.add_parser("snapshot").set_defaults(func=cmd_snapshot)

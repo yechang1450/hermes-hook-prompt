@@ -109,11 +109,12 @@ python hudctl.py off / on                   # 暂停 / 恢复
 python hudctl.py snapshot                   # 存当天快照到 snapshots/
 python hudctl.py restore latest --ttl 8h    # 从快照恢复（设计上只允许人手动跑）
 python hudctl.py prune --keep 14            # 只留最近 14 份快照
+python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/正文超长）
 python hudctl.py sessions                   # 列出最近会话（读 state.db，只读）
 python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个会话
 ```
 
-`hud_report.py` 读 `hud.log`，按档/按天统计注入与跳过（过期、会话不匹配、关闭）：
+`hud_report.py` 读 `hud.log`，按档统计注入与跳过（过期、会话不匹配、关闭）：
 
 ```bash
 python hud_report.py --since 2026-10-22
@@ -141,17 +142,28 @@ python hud_report.py --since 2026-10-22
 
 ---
 
-## 六、边界（先说清楚）
+## 六、测试
+
+19 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 面板缺失 / 截断 / 日志轮转 / `hudctl` 开关与快照 / 路径穿越拒绝 / 面板自检 / 报告统计与参数校验。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
+
+## 七、边界与安全（先说清楚）
 
 - **它是提醒，不是约束**：模型看到不等于一定照做；长上下文、指令冲突时会漂。要「不能装作没看见」得上 `pre_tool_call` 硬拦——但那条要求规则可判定，概念型提示（「自行分析、自行抉择」）翻译不成「命中什么就拦」，硬写只会变成实现者自己编的标准。
 - **每轮一次**：不是每次工具调用；工具层面的拦截是另一个事件。
 - **一个面板文件同一时间只服务一个范围**：`any` 或某一个具体会话。
 - **不自动续期、不自动恢复**：到点就停，恢复快照要人手动执行。
 - **不碰 Hermes 源码**：只有 `config.yaml` 里一行官方声明。
+- **安全边界**：`panel.md` 是模型每轮都会读的输入——能改它的人就能注入内容；只放在自己账户拥有的目录，别放共享盘。日志会记会话 id / profile（不含正文）。细节见 [SECURITY.md](SECURITY.md)。
 
 ---
 
-## 七、文件
+## 八、文件
 
 | 文件 | 作用 |
 |---|---|
@@ -160,12 +172,19 @@ python hud_report.py --since 2026-10-22
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
+| `tests/test_hud.py` | 19 个单元测试（标准库 unittest） |
+| `SECURITY.md` | 信任边界、日志内容、权限建议 |
+| `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
 ---
 
-## 八、灵感：I, Robot 里那个「眼前全是要点」的机器人
+## 九、灵感：I, Robot 里那个「眼前全是要点」的机器人
 
-《我，机器人》（2004）里，威尔·史密斯进博士家时，拆除机器人（NS-5）的第一视角不是只有画面——四周一圈叠着状态、流程、约束。它不需要「回忆」注意事项，因为注意事项一直摆在眼前。
+《我，机器人》（2004）里，斯普纳在兰宁博士家调查时，门外那台 **USR 拆除机器人（demolition robot，serial 9-4）** 扫描时会自报身份与工单：
+
+> Identify. USR, demolition robot, serial 9-4. Demolition scheduled for 8 a.m. tomorrow.
+
+它不需要「回忆」自己的任务边界——这些信息一直在它的工作视图里。
 
 这套东西就是那个 HUD 的极简版：**不靠记忆，不靠自觉回忆，每轮重新摆在模型眼前**。
 
@@ -175,6 +194,6 @@ python hud_report.py --since 2026-10-22
 
 ---
 
-## 九、许可
+## 十、许可
 
 **本仓库不附 LICENSE**：这里没有原创的机制——`hooks` 是 Hermes 官方能力，注入点、事件语义、allowlist 都由 Hermes 实现；本仓库只是把「面板文件 + 一段接线脚本」拼起来。引用 Hermes 的文档与源码时，请遵循其自身的许可条款。
