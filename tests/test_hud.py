@@ -5,6 +5,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -98,9 +99,10 @@ class HudCase(unittest.TestCase):
         self.assertTrue((self.dir / "hud.log.1").exists())
 
     # ---- hudctl ---------------------------------------------------
-    def run_ctl(self, *args):
+    def run_ctl(self, *args, env=None):
         return subprocess.run([sys.executable, str(self.dir / "hudctl.py"), *args],
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=self.dir, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              cwd=self.dir, timeout=60, env=env)
 
     def test_ctl_off_on(self):
         self.write_panel()
@@ -141,6 +143,21 @@ class HudCase(unittest.TestCase):
         r = self.run_ctl("check")
         self.assertEqual(r.returncode, 1)
         self.assertIn("缺少元数据", r.stdout)
+
+    def test_ctl_sessions_and_use(self):
+        home = self.dir / "home"
+        home.mkdir()
+        con = sqlite3.connect(home / "state.db")
+        con.execute("create table sessions (id text primary key, title text, profile_name text,"
+                    " last_activity_at real, message_count int, archived int default 0, hidden int default 0)")
+        con.execute("insert into sessions values ('20260101_000000_aaaaaa', '测试会话', 'default', 1760000000, 3, 0, 0)")
+        con.commit()
+        con.close()
+        env = dict(os.environ, HERMES_HOME=str(home))
+        out = self.run_ctl("sessions", env=env).stdout
+        self.assertIn("测试会话", out)
+        self.run_ctl("use", "测试会话", "--ttl", "1h", env=env)
+        self.assertIn("session_id: 20260101_000000_aaaaaa", self.panel.read_text(encoding="utf-8"))
 
     def test_ctl_snapshot_restore(self):
         self.write_panel(body="快照正文")
