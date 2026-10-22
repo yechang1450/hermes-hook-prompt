@@ -1,5 +1,7 @@
 # hermes-hook-prompt
 
+> 非官方项目（unofficial）：与 Nous Research / Hermes 官方无隶属关系，只是使用它公开的扩展点。
+
 给 [Hermes Agent](https://hermes-agent.nousresearch.com/docs) 装一块**每轮都摆在模型眼前**的提示面板：一段文字，每轮自动注入，带时效、可限会话、随时可改。
 
 全部用 Hermes **官方机制**实现——没有改源码、没有打补丁、没有包装外层。仓库里只有三个 Python 脚本（纯标准库）和一份面板样例。
