@@ -57,19 +57,37 @@ def parse_expiry(raw: str):
         return None
 
 
+META_KEYS = ("session_id", "expires_at", "title", "enabled")
+
+
+def _strip_comment(value: str) -> str:
+    for sep in (" #", "\t#"):
+        idx = value.find(sep)
+        if idx != -1:
+            value = value[:idx]
+    return value.strip()
+
+
 def split_panel(text: str) -> tuple[dict[str, str], str]:
-    meta, body_lines, in_meta = {}, [], True
-    for line in text.splitlines():
-        if in_meta:
-            key, sep, value = line.partition(":")
-            if sep and key.strip().lower() in {"session_id", "expires_at", "title", "enabled"}:
-                meta[key.strip().lower()] = value.strip()
+    """与 hud_inject.parse_panel 同源：前 24 行连续元数据，空行/非元数据行结束元数据块。"""
+    meta, lines = {}, text.splitlines()
+    body_start = 0
+    for i, line in enumerate(lines[:24]):
+        stripped = line.strip()
+        if not stripped:
+            if meta:
+                break
+            body_start = i + 1
+            continue
+        if ":" in line:
+            key, value = line.split(":", 1)
+            name = key.strip().lower()
+            if name in META_KEYS:
+                meta[name] = _strip_comment(value)
+                body_start = i + 1
                 continue
-            if line.strip() == "":
-                continue
-            in_meta = False
-        body_lines.append(line)
-    return meta, "\n".join(body_lines).strip()
+        break
+    return meta, "\n".join(lines[body_start:]).strip()
 
 
 def read_panel() -> tuple[dict[str, str], str]:
@@ -80,7 +98,11 @@ def read_panel() -> tuple[dict[str, str], str]:
             print(f"（面板不存在，已从 panel.example.md 复制：{PANEL}）")
         else:
             raise SystemExit(f"面板不存在：{PANEL}（先 cp panel.example.md panel.md）")
-    return split_panel(PANEL.read_text(encoding="utf-8").lstrip("\ufeff"))
+    try:
+        raw = PANEL.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise SystemExit(f"面板不是合法 UTF-8：{PANEL}")
+    return split_panel(raw.lstrip("\ufeff"))
 
 
 def write_panel(meta: dict[str, str], body: str) -> None:
@@ -90,8 +112,16 @@ def write_panel(meta: dict[str, str], body: str) -> None:
     meta.setdefault("enabled", "true")
     if "expires_at" not in meta:
         raise SystemExit("面板缺少 expires_at，无法写入（先补一行到期时间）")
-    head = "\n".join(f"{k}: {meta[k]}" for k in ("session_id", "expires_at", "title", "enabled"))
-    PANEL.write_text(f"{head}\n\n{body}\n", encoding="utf-8")
+    for key in META_KEYS:
+        if "\n" in meta[key] or "\r" in meta[key]:
+            raise SystemExit(f"元数据 {key} 不能包含换行")
+    head = "\n".join(f"{k}: {meta[k]}" for k in META_KEYS)
+    if os.path.islink(PANEL):
+        raise SystemExit(f"面板是符号链接，拒绝写入：{PANEL}")
+    data = f"{head}\n\n{body}\n"
+    tmp = PANEL.with_name(f"{PANEL.name}.{os.getpid()}.tmp")
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, PANEL)  # 原子替换：注入端不会读到空/半截文件
 
 
 def _hermes_home() -> Path:
@@ -105,53 +135,89 @@ def _hermes_home() -> Path:
     return Path.home() / ".local" / "share" / "hermes"
 
 
-def _state_db() -> Path:
-    return _hermes_home() / "state.db"
+def _state_dbs() -> list[tuple[str, Path]]:
+    """default 档 + 每个 profile 自己的 state.db（各档会话库是分开的）。"""
+    home = _hermes_home()
+    found: list[tuple[str, Path]] = []
+    root = home / "state.db"
+    if root.exists():
+        found.append(("default", root))
+    profiles = home / "profiles"
+    if profiles.is_dir():
+        for entry in sorted(profiles.iterdir()):
+            if not entry.is_dir() or entry.name == ".deleted":
+                continue
+            db = entry / "state.db"
+            if db.exists():
+                found.append((entry.name, db))
+    return found
 
 
 def cmd_sessions(args) -> int:
-    """列出最近的会话（id / 标题 / 档 / 最后活动），方便挑一个挂面板。"""
+    """列出所有档最近的会话（id / 档 / 最后活动 / 标题）。"""
     import sqlite3
-    db = _state_db()
-    if not db.exists():
-        raise SystemExit(f"找不到会话库：{db}")
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        rows = con.execute(
-            "select id, title, profile_name, last_activity_at, message_count from sessions "
-            "where coalesce(archived,0)=0 and coalesce(hidden,0)=0 and id not like 'cron_%' "
-            "order by last_activity_at desc limit ?", (args.limit,)
-        ).fetchall()
-    except sqlite3.Error:
-        # 老版本/改过 schema 的库：退回最小列集
-        rows = con.execute(
-            "select id, title, null, last_activity_at, 0 from sessions "
-            "order by last_activity_at desc limit ?", (args.limit,)
-        ).fetchall()
+    dbs = _state_dbs()
+    if not dbs:
+        raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
+    rows = []
+    for profile, db in dbs:
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        except sqlite3.Error as exc:
+            print(f"（跳过 {profile}：{exc}）")
+            continue
+        try:
+            part = con.execute(
+                "select id, title, last_activity_at, message_count from sessions "
+                "where coalesce(archived,0)=0 and coalesce(hidden,0)=0 and id not like 'cron_%' "
+                "order by last_activity_at desc limit ?", (args.limit,)
+            ).fetchall()
+        except sqlite3.Error:
+            part = con.execute(
+                "select id, title, last_activity_at, 0 from sessions "
+                "order by last_activity_at desc limit ?", (args.limit,)
+            ).fetchall()
+        finally:
+            con.close()
+        rows.extend((sid, title, profile, ts, n) for sid, title, ts, n in part)
+    rows.sort(key=lambda r: r[3] or 0, reverse=True)
     print(f"{'会话 id':<26} {'档':<12} {'消息':>4}  最后活动     标题")
-    for sid, title, prof, ts, n in rows:
+    for sid, title, profile, ts, n in rows[: args.limit]:
         when = datetime.fromtimestamp(ts, CST).strftime("%m-%d %H:%M") if ts else "-"
-        print(f"{sid:<26} {(prof or 'default'):<12} {n or 0:>4}  {when}  {(title or '')[:28]}")
+        print(f"{sid:<26} {profile:<12} {n or 0:>4}  {when}  {(title or '')[:28]}")
     return 0
 
 
 def cmd_use(args) -> int:
     """把面板指向另一个会话（按 id 或标题子串匹配）。"""
     import sqlite3
-    db = _state_db()
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    rows = con.execute(
-        "select id, title from sessions where coalesce(archived,0)=0 "
-        "order by last_activity_at desc limit 300"
-    ).fetchall()
+    dbs = _state_dbs()
+    if not dbs:
+        raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
+    rows = []
+    for profile, db in dbs:
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        except sqlite3.Error:
+            continue
+        try:
+            part = con.execute(
+                "select id, title from sessions where coalesce(archived,0)=0 "
+                "order by last_activity_at desc limit 300"
+            ).fetchall()
+        except sqlite3.Error:
+            continue
+        finally:
+            con.close()
+        rows.extend((sid, title, profile) for sid, title in part)
     target = args.target
     hits = [r for r in rows if r[0] == target] or [r for r in rows if target.lower() in (r[1] or "").lower()]
     if not hits:
         raise SystemExit(f"没找到会话：{target}（先跑 `python hudctl.py sessions`）")
     if len(hits) > 1:
-        listing = "\n".join(f"  {sid}  {title}" for sid, title in hits[:8])
+        listing = "\n".join(f"  {sid}  [{prof}] {title}" for sid, title, prof in hits[:8])
         raise SystemExit(f"匹配到多个会话，请给完整 id：\n{listing}")
-    sid, title = hits[0]
+    sid, title, _prof = hits[0]
     meta, body = read_panel()
     meta["session_id"] = sid
     meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
@@ -229,8 +295,9 @@ def cmd_check(_args) -> int:
             problems.append(f"面板已过期：{meta.get('expires_at')}（注入会被跳过）")
     if not body:
         problems.append("正文为空")
-    if len(body) > 1600:
-        problems.append(f"正文 {len(body)} 字，超过注入上限 1600（会被截断）")
+    header = f"[HUD·{meta.get('title', '会话面板')}] 生效至 12-31 07:00（default）\n"
+    if len(header) + len(body) > 1600:
+        problems.append(f"注入块约 {len(header) + len(body)} 字（标题行+正文），超过 1600 上限（会被截断）")
     if problems:
         print("✗ 面板有问题：")
         for p in problems:

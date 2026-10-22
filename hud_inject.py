@@ -38,7 +38,9 @@ MAX_LOG_BYTES = 1_000_000
 
 def log(line: str) -> None:
     try:
-        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        parent = os.path.dirname(LOG)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         try:
             if os.path.getsize(LOG) > MAX_LOG_BYTES:
                 os.replace(LOG, LOG + ".1")
@@ -50,18 +52,53 @@ def log(line: str) -> None:
         pass
 
 
+META_KEYS = {"session_id", "expires_at", "title", "enabled"}
+
+
+def _strip_comment(value: str) -> str:
+    """元数据行里的行内注释（空白 + #）去掉；正文不做处理。"""
+    for sep in (" #", "\t#"):
+        idx = value.find(sep)
+        if idx != -1:
+            value = value[:idx]
+    return value.strip()
+
+
+def _reject_unsafe(path: str) -> str:
+    """返回拒绝原因；安全则返回空串。防软链/重解析点/非普通文件被当面板读。"""
+    if not os.path.exists(path):
+        return ""  # 交给 open() 报缺文件，日志记 skip no-panel
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        return f"lstat:{type(exc).__name__}"
+    if os.path.islink(path) or getattr(st, "st_file_attributes", 0) & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+        return "symlink-or-reparse"
+    import stat as _stat
+    if not _stat.S_ISREG(st.st_mode):
+        return "not-regular-file"
+    return ""
+
+
 def parse_panel(text: str):
+    """前 24 行内、连续的非空元数据行；遇到空行或非元数据行即视为正文开始。"""
     meta, lines = {}, text.splitlines()
     body_start = 0
-    for i, line in enumerate(lines[:8]):
-        if ":" in line and not line.strip().startswith("#"):
+    for i, line in enumerate(lines[:24]):
+        stripped = line.strip()
+        if not stripped:
+            if meta:
+                break
+            body_start = i + 1
+            continue
+        if ":" in line:
             key, value = line.split(":", 1)
-            if key.strip().lower() in {"session_id", "expires_at", "title", "enabled"}:
-                meta[key.strip().lower()] = value.strip()
+            name = key.strip().lower()
+            if name in META_KEYS:
+                meta[name] = _strip_comment(value)
                 body_start = i + 1
                 continue
-        if line.strip():
-            break
+        break
     body = "\n".join(lines[body_start:]).strip()
     return meta, body
 
@@ -71,13 +108,23 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except Exception:
         payload = {}
+    if not isinstance(payload, dict):
+        log(f"skip bad-payload type={type(payload).__name__}")
+        return 0
     session_id = str(payload.get("session_id") or "")
     profile = str(payload.get("profile") or "")
+    unsafe = _reject_unsafe(PANEL)
+    if unsafe:
+        log(f"skip unsafe-panel reason={unsafe} session={session_id}")
+        return 0
     try:
         with open(PANEL, encoding="utf-8") as fh:
             text = fh.read(200_000)  # 面板不该有这么大；上限防误放巨型文件
-    except OSError:
+    except FileNotFoundError:
         log(f"skip no-panel session={session_id} profile={profile}")
+        return 0
+    except (OSError, UnicodeDecodeError) as exc:
+        log(f"skip unreadable-panel session={session_id} profile={profile} err={type(exc).__name__}")
         return 0
     text = text.lstrip("\ufeff")
     meta, body = parse_panel(text)

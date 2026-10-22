@@ -18,6 +18,12 @@
 - 多用户机器上注意目录权限；Windows 下可用 `icacls <dir> /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"` 收紧；
 - 面板正文不要粘贴不可信来源的整段文本（比如网页抓取内容）。
 
+## 文件安全
+
+- 面板是**符号链接 / Windows 重解析点**时，`hud_inject.py` 拒绝读取（日志记 `skip unsafe-panel`）——防止把 `~/.ssh/id_rsa` 之类的文件当面板送进模型；
+- 面板必须是普通文件，FIFO/设备文件一律拒绝；
+- `hudctl.py` 写面板用「同目录临时文件 + `os.replace`」原子替换，注入端不会读到空/半截内容；面板本身是符号链接时拒绝写入。
+
 ## 日志
 
 `hud.log` 会记录 **会话 id** 与 **profile 名**（不含对话正文）。分享日志排障前先想一下这些标识是否敏感；脚本在日志超过 1 MB 时自动轮转到 `hud.log.1`。

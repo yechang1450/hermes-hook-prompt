@@ -38,6 +38,13 @@ class HudCase(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def inject_json(self, payload):
+        env = dict(os.environ, HUD_PANEL=str(self.panel), HUD_LOG=str(self.log))
+        out = subprocess.run([sys.executable, str(self.dir / "hud_inject.py")], input=payload,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             env=env, timeout=180)
+        return out.returncode, out.stdout.strip()
+
     def inject(self, session="s1", profile="default"):
         env = dict(os.environ, HUD_PANEL=str(self.panel), HUD_LOG=str(self.log))
         out = subprocess.run(
@@ -143,6 +150,82 @@ class HudCase(unittest.TestCase):
         r = self.run_ctl("check")
         self.assertEqual(r.returncode, 1)
         self.assertIn("缺少元数据", r.stdout)
+
+
+    def test_inline_comment_stripped(self):
+        self.panel.write_text(
+            "session_id: any  # 注释\nexpires_at: 2099-01-01T00:00:00+08:00  # 到点失效\n"
+            "title: t\nenabled: true\n\n正文\n", encoding="utf-8")
+        self.assertIn("正文", self.context(self.inject()[1]))
+
+    def test_meta_after_leading_blank_lines(self):
+        self.panel.write_text("\n\n\nsession_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
+                              "title: t\nenabled: true\n\n正文\n", encoding="utf-8")
+        self.assertIn("正文", self.context(self.inject()[1]))
+
+    def test_bad_payload_is_silent(self):
+        self.write_panel()
+        rc, out = self.inject_json("[]")
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("skip bad-payload", self.log.read_text(encoding="utf-8"))
+
+    def test_invalid_utf8_is_silent(self):
+        self.panel.write_bytes(b"session_id: any\n\nexpires_at: 2099-01-01T00:00:00+08:00\n\xff\n")
+        rc, out = self.inject()
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("skip unreadable-panel", self.log.read_text(encoding="utf-8"))
+
+    def test_write_rejects_newline_in_meta(self):
+        self.write_panel()
+        r = self.run_ctl("set", "--ttl", "1h", "--title", "a\nb")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("换行", r.stdout + r.stderr)
+
+    def test_check_flags_oversized_block(self):
+        self.panel.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
+                              "title: t\nenabled: true\n\n" + "字" * 1590 + "\n", encoding="utf-8")
+        r = self.run_ctl("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("1600", r.stdout)
+
+
+    def test_sessions_across_profiles(self):
+        home = self.dir / "home"
+        (home / "profiles" / "proj-9").mkdir(parents=True)
+        for db, sid, title in ((home / "state.db", "20260101_000000_aaaaaa", "默认会话"),
+                               (home / "profiles" / "proj-9" / "state.db", "20260102_000000_bbbbbb", "九号会话")):
+            con = sqlite3.connect(db)
+            con.execute("create table sessions (id text primary key, title text, profile_name text,"
+                        " last_activity_at real, message_count int, archived int default 0, hidden int default 0)")
+            con.execute("insert into sessions values (?,?,?,?,?,0,0)", (sid, title, "x", 1760000000, 1))
+            con.commit(); con.close()
+        env = dict(os.environ, HERMES_HOME=str(home))
+        out = self.run_ctl("sessions", env=env).stdout
+        self.assertIn("默认会话", out)
+        self.assertIn("九号会话", out)
+        self.assertIn("proj-9", out)
+
+    def test_report_reads_rotated_log(self):
+        self.write_panel(enabled="false")
+        self.log.with_name(self.log.name + ".1").write_text(
+            "2026-01-01T00:00:00+08:00 inject session=old profile=work chars=10\n", encoding="utf-8")
+        self.inject()
+        env = dict(os.environ, HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=180)
+        self.assertIn("work", r.stdout)
+        self.assertIn("总行数 2", r.stdout)
+
+    def test_symlink_panel_is_refused(self):
+        target = self.dir / "real.md"
+        target.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\ntitle: t\nenabled: true\n\n正文\n", encoding="utf-8")
+        try:
+            os.symlink(target, self.panel)
+        except (OSError, NotImplementedError):
+            self.skipTest("当前系统不允许创建符号链接")
+        rc, out = self.inject()
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("skip unsafe-panel", self.log.read_text(encoding="utf-8"))
 
     def test_ctl_sessions_and_use(self):
         home = self.dir / "home"

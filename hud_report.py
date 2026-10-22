@@ -17,6 +17,7 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -38,9 +39,12 @@ def main() -> int:
     ap.add_argument("--since", default="")
     args = ap.parse_args()
     since = args.since.strip()
-    if since and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
-        print(f"--since 需要 YYYY-MM-DD：{since}")
-        return 2
+    if since:
+        try:
+            datetime.strptime(since, "%Y-%m-%d")
+        except ValueError:
+            print(f"--since 需要合法的 YYYY-MM-DD：{since}")
+            return 2
 
     if not LOG.exists():
         print(f"没有日志：{LOG}")
@@ -53,7 +57,11 @@ def main() -> int:
     recent: list[str] = []
     total = 0
 
-    for raw in LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+    sources = [p for p in (LOG.with_name(LOG.name + ".1"), LOG) if p.exists()]
+    lines_all: list[str] = []
+    for src in sources:
+        lines_all.extend(src.read_text(encoding="utf-8", errors="replace").splitlines())
+    for raw in lines_all:
         m = LINE.match(raw.strip())
         if not m:
             continue
@@ -89,7 +97,11 @@ def main() -> int:
         print("  " + line)
 
     if PANEL.exists():
-        head = PANEL.read_text(encoding="utf-8").splitlines()[:4]
+        try:
+            head = PANEL.read_text(encoding="utf-8").splitlines()[:4]
+        except UnicodeDecodeError:
+            print("\n当前面板：不是合法 UTF-8，无法预览")
+            return 0
         print("\n当前面板：")
         for line in head:
             print("  " + line)
