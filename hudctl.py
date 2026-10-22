@@ -251,7 +251,10 @@ def cmd_set(args) -> int:
     if args.title:
         meta["title"] = args.title
     if args.body:
-        body = Path(args.body).read_text(encoding="utf-8").strip()
+        body_path = Path(args.body)
+        if not body_path.is_file():
+            raise SystemExit(f"正文文件不存在：{body_path}")
+        body = body_path.read_text(encoding="utf-8").strip()
     elif not sys.stdin.isatty():
         incoming = sys.stdin.read().strip()
         if incoming:
@@ -275,7 +278,21 @@ def cmd_check(_args) -> int:
     raw = PANEL.read_text(encoding="utf-8")
     if raw.startswith("\ufeff"):
         problems.append("文件带 BOM（注入端能容忍，但建议去掉）")
-    meta, body = split_panel(raw.lstrip("\ufeff"))
+    raw = raw.lstrip("\ufeff")
+    seen: set[str] = set()
+    for line in raw.splitlines()[:24]:
+        if not line.strip():
+            break
+        key, sep, value = line.partition(":")
+        name = key.strip().lower()
+        if not sep or name not in META_KEYS:
+            break
+        if name in seen:
+            problems.append(f"重复元数据：{name}")
+        seen.add(name)
+        if any(ord(ch) < 32 for ch in value):
+            problems.append(f"元数据 {name} 含控制字符")
+    meta, body = split_panel(raw)
     for key in META_KEYS:
         if key not in meta:
             problems.append(f"缺少元数据：{key}")

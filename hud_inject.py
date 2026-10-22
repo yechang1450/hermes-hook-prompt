@@ -129,11 +129,11 @@ def main() -> int:
     text = text.lstrip("\ufeff")
     meta, body = parse_panel(text)
     if meta.get("enabled", "true").lower() in {"0", "false", "no", "off"}:
-        log(f"skip disabled session={session_id}")
+        log(f"skip disabled session={session_id} profile={profile}")
         return 0
     scope = meta.get("session_id", "any").strip()
     if scope not in {"", "any", "*"} and scope != session_id:
-        log(f"skip other-session scope={scope} session={session_id}")
+        log(f"skip other-session scope={scope} session={session_id} profile={profile}")
         return 0
     try:
         raw = meta.get("expires_at", "").strip()
@@ -141,19 +141,19 @@ def main() -> int:
             raw = raw[:-1] + "+00:00"
         expires = datetime.fromisoformat(raw)
     except Exception:
-        log(f"skip bad-expiry meta={meta.get('expires_at')!r}")
+        log(f"skip bad-expiry meta={meta.get('expires_at')!r} session={session_id} profile={profile}")
         return 0
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     now = datetime.now(CST)
     if now >= expires:
-        log(f"skip expired at {expires.isoformat()} session={session_id}")
+        log(f"skip expired at {expires.isoformat()} session={session_id} profile={profile}")
         return 0
     if not body:
-        log(f"skip empty-body session={session_id}")
+        log(f"skip empty-body session={session_id} profile={profile}")
         return 0
     title = meta.get("title", "会话面板")
-    stamp = expires.strftime("%m-%d %H:%M")
+    stamp = expires.astimezone(CST).strftime("%m-%d %H:%M")
     block = f"[HUD·{title}] 生效至 {stamp}（{profile or 'default'}）\n{body}"
     if len(block) > MAX_CHARS:
         block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"

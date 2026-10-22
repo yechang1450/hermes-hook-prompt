@@ -227,6 +227,25 @@ class HudCase(unittest.TestCase):
         self.assertEqual((rc, out), (0, ""))
         self.assertIn("skip unsafe-panel", self.log.read_text(encoding="utf-8"))
 
+
+    def test_check_flags_duplicate_meta(self):
+        self.panel.write_text("session_id: any\nsession_id: other\nexpires_at: 2099-01-01T00:00:00+08:00\n"
+                              "title: t\nenabled: true\n\n正文\n", encoding="utf-8")
+        r = self.run_ctl("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("重复元数据", r.stdout)
+
+    def test_set_missing_body_file_is_friendly(self):
+        self.write_panel()
+        r = self.run_ctl("set", "--ttl", "1h", "--body", str(self.dir / "nope.md"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("正文文件不存在", r.stdout + r.stderr)
+
+    def test_utc_expiry_shown_in_local_time(self):
+        self.write_panel(expires="2099-01-01T00:00:00Z")
+        ctx = self.context(self.inject()[1])
+        self.assertIn("01-01 08:00", ctx.splitlines()[0])
+
     def test_ctl_sessions_and_use(self):
         home = self.dir / "home"
         home.mkdir()
