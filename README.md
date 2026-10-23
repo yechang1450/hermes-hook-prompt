@@ -126,7 +126,19 @@ python hud_report.py --since 2026-10-22
 
 ---
 
-## 五、怎么验证「真的被听见」
+## 五、自检与版本适配
+
+Hermes 更新后，钩子实现可能换文件（本机 10-23 的更新就把 `pre_llm_call` 从 `agent/shell_hooks.py` 挪到了 `hermes_cli/plugins_dispatch.py`）。`selfcheck.py` 做一次机制体检：
+
+```bash
+python selfcheck.py          # 0=全绿；2=有失败（需要适配）
+```
+
+查六项：事件还在不在、注入点还在不在、本档 config 声明、allowlist 同意、端到端注入、面板格式。结果写 `state/selfcheck.json`（含机制指纹）。
+
+`hud_inject.py` 每轮对比指纹：**更新后第一次注入就会多一行提醒**「Hermes 已更新、机制未复检：先跑 selfcheck.py」；自检通过后提醒自动消失。指纹不变、自检通过时不会多任何一个字。
+
+## 六、怎么验证「真的被听见」
 
 只看注入日志不算。两条断言都要过：
 
@@ -146,9 +158,9 @@ python hud_report.py --since 2026-10-22
 
 ---
 
-## 六、测试
+## 七、测试
 
-37 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+38 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -156,7 +168,7 @@ python -m unittest discover -s tests -v
 
 覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符）/ UTC 到期按本地显示 / 报告统计与参数校验。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
 
-## 七、边界与安全（先说清楚）
+## 八、边界与安全（先说清楚）
 
 - **它是提醒，不是约束**：模型看到不等于一定照做；长上下文、指令冲突时会漂。要「不能装作没看见」得上 `pre_tool_call` 硬拦——但那条要求规则可判定，概念型提示（「自行分析、自行抉择」）翻译不成「命中什么就拦」，硬写只会变成实现者自己编的标准。
 - **每轮一次**：不是每次工具调用；工具层面的拦截是另一个事件。
@@ -167,22 +179,23 @@ python -m unittest discover -s tests -v
 
 ---
 
-## 八、文件
+## 九、文件
 
 | 文件 | 作用 |
 |---|---|
 | `hud_inject.py` | `pre_llm_call` 钩子本体：读面板 → 判会话/时效 → 输出 `{"context": …}` |
 | `hudctl.py` | 人来操作面板：status / set / off / on / snapshot / restore / sessions / use / prune |
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
+| `selfcheck.py` | Hermes 更新后的机制体检（6 项），写 `state/selfcheck.json` |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/test_hud.py` | 37 个单元测试（标准库 unittest） |
+| `tests/test_hud.py` | 38 个单元测试（标准库 unittest） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
 ---
 
-## 九、灵感：I, Robot 里那个「眼前全是要点」的机器人
+## 十、灵感：I, Robot 里那个「眼前全是要点」的机器人
 
 《我，机器人》（2004）里，斯普纳在兰宁博士家调查时，门外那台 **USR 拆除机器人**扫描时会自报身份与工单：
 
@@ -198,7 +211,7 @@ python -m unittest discover -s tests -v
 
 ---
 
-## 十、版权与使用
+## 十一、版权与使用
 
 Copyright © 2026 yechang1450. All rights reserved.
 

@@ -289,6 +289,12 @@ class HudCase(unittest.TestCase):
         ctx_bot = self.context(self.inject(profile="proj-80")[1])
         self.assertIn("proj-80 bot：优先用 OTUI", ctx_bot)
 
+
+    def test_selfcheck_warning_when_state_missing(self):
+        self.write_panel()
+        ctx = self.context(self.inject()[1])
+        self.assertIn("⚠", ctx)  # 临时目录没有 state/selfcheck.json
+
     def test_ctl_sessions_and_use(self):
         home = self.dir / "home"
         home.mkdir()

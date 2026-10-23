@@ -16,6 +16,7 @@ Hermes 会把它追加到本轮用户消息后面。不满足就一声不响退�
 退出码永远 0：钩子坏了不该拦住正常对话（fail-open）。
 环境变量：HUD_PANEL / HUD_LOG 可覆盖默认路径。
 """
+import hashlib
 import json
 import os
 import sys
@@ -34,6 +35,37 @@ for _stream in (sys.stdout, sys.stderr):
 
 MAX_CHARS = 1600
 MAX_LOG_BYTES = 1_000_000
+HERMES_HOME = os.environ.get("HERMES_HOME") or os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local"), "hermes")
+SOURCE = os.path.join(HERMES_HOME, "hermes-agent")
+STATE_FILE = os.path.join(ROOT, "state", "selfcheck.json")
+
+
+def _mech_fingerprint() -> str:
+    parts = []
+    for rel in ("agent/turn_context.py", "hermes_cli/plugins_dispatch.py",
+                "hermes_cli/hooks.py", "agent/shell_hooks.py"):
+        path = os.path.join(SOURCE, rel)
+        try:
+            st = os.stat(path)
+            parts.append(f"{rel}:{st.st_size}:{st.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{rel}:missing")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _selfcheck_note() -> str:
+    """更新后未自检/自检失败时给一行提醒；正常时为空。"""
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except Exception:
+        return "⚠ 机制未自检：先跑 python selfcheck.py"
+    if state.get("fingerprint") != _mech_fingerprint():
+        return "⚠ Hermes 已更新、机制未复检：先跑 python selfcheck.py，失败则按提示适配新版"
+    if not state.get("ok"):
+        return "⚠ 机制自检失败：看 state/selfcheck.json 并适配新版"
+    return ""
 
 
 def log(line: str) -> None:
@@ -159,6 +191,9 @@ def main() -> int:
             if who == "default" else
             f"{who} bot：优先用 OTUI（build/open-tui-orchestrator）")
     block = f"[HUD·{title}] 生效至 {stamp}（{who}）\n{body}\n\n执行机制建议：{hint}"
+    note = _selfcheck_note()
+    if note:
+        block += "\n" + note
     if len(block) > MAX_CHARS:
         block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"
     log(f"inject session={session_id} profile={profile} chars={len(block)}")

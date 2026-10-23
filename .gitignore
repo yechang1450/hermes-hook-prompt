@@ -2,6 +2,7 @@ panel.md
 hud.log
 hud.log.1
 snapshots/
+state/
 _retired/
 __pycache__/
 *.pyc
