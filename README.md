@@ -102,6 +102,8 @@ enabled: true                                  # off 即暂停，不用删配置
 
 ## 四、日常操作（`hudctl.py`）
 
+面板正文是**压缩版**（约 540 字；完整措辞存档在 `docs/panel-full-text.md`，规则条数与约束一一对应）。
+
 注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向 OTUI（`build/open-tui-orchestrator`）。
 
 ```bash
