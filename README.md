@@ -198,6 +198,12 @@ python -m unittest discover -s tests -v
 
 ---
 
-## 十、许可
+## 十、版权与使用
 
-**本仓库不附 LICENSE**：这里没有原创的机制——`hooks` 是 Hermes 官方能力，注入点、事件语义、allowlist 都由 Hermes 实现；本仓库只是把「面板文件 + 一段接线脚本」拼起来。引用 Hermes 的文档与源码时，请遵循其自身的许可条款。
+Copyright © 2026 yechang1450. All rights reserved.
+
+No additional license or permission is granted beyond rights provided by
+GitHub's Terms of Service or applicable law. Third-party components remain
+subject to their own license notices.
+
+本项目使用 Hermes 公开的扩展机制，但与 Nous Research / Hermes 官方无隶属关系；Hermes Agent 及其接口、名称和商标归各自权利人所有。
