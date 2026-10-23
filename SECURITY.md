@@ -36,4 +36,4 @@
 
 ## 报告问题
 
-开 issue 即可，请不要在 issue 里贴真实的 `panel.md` 内容、会话 id 或日志原文；用脱敏后的最小复现。
+请使用本仓库 GitHub “Security” 页中的 **Report a vulnerability** 私密报告入口。不要在公开 issue 里贴真实的 `panel.md` 内容、会话 id、日志原文或可直接利用的复现细节；需要公开讨论时，请使用脱敏后的最小复现。
