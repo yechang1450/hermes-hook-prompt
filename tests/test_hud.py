@@ -216,6 +216,41 @@ class HudCase(unittest.TestCase):
         self.assertIn("work", r.stdout)
         self.assertIn("总行数 2", r.stdout)
 
+
+    def test_ctl_honours_panel_env(self):
+        alt = self.dir / "alt.md"
+        alt.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\ntitle: alt\n"
+                       "enabled: true\n\nALT\n", encoding="utf-8")
+        env = dict(os.environ, HUD_PANEL=str(alt))
+        out = self.run_ctl("status", env=env).stdout
+        self.assertIn("alt.md", out)
+
+    def test_ctl_rejects_bad_ttl(self):
+        self.write_panel()
+        for ttl in ("0h", "999999999999d"):
+            r = self.run_ctl("set", "--ttl", ttl, "--body", str(self.dir / "panel.md"))
+            self.assertNotEqual(r.returncode, 0, ttl)
+            self.assertIn("TTL", r.stdout + r.stderr)
+
+    def test_prune_rejects_non_positive_keep(self):
+        self.write_panel()
+        self.run_ctl("snapshot")
+        r = self.run_ctl("prune", "--keep", "0")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--keep", r.stdout + r.stderr)
+        self.assertTrue(any((self.dir / "snapshots").glob("*.md")))
+
+    def test_restore_latest_ignores_stray_md(self):
+        self.write_panel(body="当日快照")
+        self.run_ctl("snapshot")
+        (self.dir / "snapshots" / "zz-notes.md").write_text(
+            "session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\ntitle: stray\nenabled: true\n\n乱入\n",
+            encoding="utf-8")
+        self.write_panel(body="被改过")
+        r = self.run_ctl("restore", "latest")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("当日快照", self.panel.read_text(encoding="utf-8"))
+
     def test_symlink_panel_is_refused(self):
         target = self.dir / "real.md"
         target.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\ntitle: t\nenabled: true\n\n正文\n", encoding="utf-8")

@@ -48,7 +48,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 
 ## 二、安装
 
-要求：Python 3.9+（只用标准库），Hermes 能正常启动。仓库＝三个脚本 + 一份面板样例。
+要求：Python 3.10+（只用标准库；CI 覆盖 3.10 / 3.12），Hermes 能正常启动。仓库＝三个脚本 + 一份面板样例。
 实测环境：Windows 11、Hermes v0.22.2、Python 3.14.7。
 
 ```bash
@@ -96,7 +96,7 @@ enabled: true                                  # off 即暂停，不用删配置
 （空行之后是正文，原样注入）
 ```
 
-正文建议控制在 **1000 字以内**（脚本硬上限 1600 字，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，本机实测约 60ms。
+正文建议控制在 **1000 字以内**（脚本硬上限 1600 字，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，视环境而定，本机常在 0.3–0.6s（慢盘/杀软下更久）。
 
 ---
 
@@ -146,7 +146,7 @@ python hud_report.py --since 2026-10-22
 
 ## 六、测试
 
-33 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+37 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -174,7 +174,7 @@ python -m unittest discover -s tests -v
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/test_hud.py` | 33 个单元测试（标准库 unittest） |
+| `tests/test_hud.py` | 37 个单元测试（标准库 unittest） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 

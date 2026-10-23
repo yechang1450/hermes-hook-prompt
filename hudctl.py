@@ -25,8 +25,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-PANEL = ROOT / "panel.md"
-SNAPS = ROOT / "snapshots"
+PANEL = Path(os.environ.get("HUD_PANEL") or (ROOT / "panel.md"))
+SNAPS = Path(os.environ.get("HUD_SNAPS") or (ROOT / "snapshots"))
 CST = timezone(timedelta(hours=8))
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -38,12 +38,22 @@ for _stream in (sys.stdout, sys.stderr):
 TTL_RE = re.compile(r"^(\d+(?:\.\d+)?)([mhd])$")
 
 
+MAX_TTL_DAYS = 3650  # 10 年，防溢出
+
+
 def parse_ttl(text: str) -> timedelta:
     m = TTL_RE.match(text.strip().lower())
     if not m:
         raise SystemExit(f"TTL 写法不认：{text}（例：30m / 12h / 2d）")
     value, unit = float(m.group(1)), m.group(2)
-    return timedelta(minutes=value) if unit == "m" else timedelta(hours=value) if unit == "h" else timedelta(days=value)
+    if value <= 0:
+        raise SystemExit(f"TTL 必须大于 0：{text}")
+    limit = {"m": MAX_TTL_DAYS * 1440, "h": MAX_TTL_DAYS * 24, "d": MAX_TTL_DAYS}[unit]
+    if value > limit:
+        raise SystemExit(f"TTL 过大（上限 {MAX_TTL_DAYS} 天）：{text}")
+    return (timedelta(minutes=value) if unit == "m"
+            else timedelta(hours=value) if unit == "h"
+            else timedelta(days=value))
 
 
 def parse_expiry(raw: str):
@@ -347,7 +357,7 @@ def cmd_restore(args) -> int:
     SNAPS.mkdir(exist_ok=True)
     if args.date != "latest" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         raise SystemExit(f"日期格式应为 YYYY-MM-DD 或 latest：{args.date}")
-    snaps = sorted(SNAPS.glob("*.md"))
+    snaps = sorted(p for p in SNAPS.glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", p.name))
     if not snaps:
         raise SystemExit("没有快照可恢复")
     if args.date == "latest":
@@ -367,6 +377,8 @@ def cmd_restore(args) -> int:
 
 
 def cmd_prune(args) -> int:
+    if args.keep < 1:
+        raise SystemExit(f"--keep 必须 >= 1：{args.keep}")
     snaps = sorted(SNAPS.glob("*.md"))
     drop = snaps[: max(0, len(snaps) - args.keep)]
     for path in drop:
