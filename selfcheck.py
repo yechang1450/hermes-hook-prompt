@@ -143,7 +143,14 @@ def _e2e() -> tuple[bool, str]:
 
 
 def _panel_check() -> tuple[bool, str, list[str]]:
-    """面板格式：只把 check 的 errors 当失败；notices（过期/暂停/范围）只作提示。"""
+    """面板格式：只把 check 的 errors 当失败；notices（过期/暂停/范围）只作提示。
+
+    全新克隆里没有 panel.md（面板是本地数据，不入库）：这不算机制故障，
+    按「未安装」提示，否则 fresh-clone 一跑自检就红。
+    """
+    panel = Path(os.environ.get("HUD_PANEL") or (ROOT / "panel.md"))
+    if not panel.exists():
+        return True, "未安装面板（panel.md 缺失）", ["面板未安装：复制 panel.example.md 为 panel.md 后跑 hudctl check"]
     try:
         proc = subprocess.run([sys.executable, str(ROOT / "hudctl.py"), "check", "--json"],
                               capture_output=True, text=True, encoding="utf-8",

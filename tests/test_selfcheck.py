@@ -88,6 +88,12 @@ class SelfcheckCase(unittest.TestCase):
         self.assertTrue(any(not c["ok"] for c in data["checks"]))
 
     # ---- P0-1：面板状态不是机制故障 --------------------------------
+    def test_missing_panel_is_not_a_failure(self):
+        """全新克隆没有 panel.md：按“未安装”提示，不判机制故障。"""
+        r = self.run_check(HUD_PANEL=str(self.home / "nope.md"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("未安装", r.stdout)
+
     def test_expired_live_panel_is_not_a_failure(self):
         self.write_panel(expires="2020-01-01T00:00:00+08:00")
         r = self.run_check()
