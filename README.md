@@ -168,7 +168,7 @@ python hudctl.py scope <条目号> all|session:id|profile:p|none   # 改单条�
 python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个会话
 ```
 
-`hud_report.py` 读 `hud.log`，按档统计注入与跳过（过期、会话不匹配、关闭），并汇总**作用域过滤**（多少轮有条目被筛掉、`invalid_scope` 次数）：
+`hud_report.py` 读 `hud.log`，按档统计注入与跳过（过期、会话不匹配、关闭），并汇总**作用域过滤**（多少轮有条目被筛掉、`invalid_scope` 次数），格式不识别的行会单独计数提示（不再静默丢弃）：
 
 ```bash
 python hud_report.py --since 2026-10-22
