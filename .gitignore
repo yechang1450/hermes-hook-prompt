@@ -1,4 +1,6 @@
 panel.md
+panel.md.lock
+*.tmp
 hud.log
 hud.log.1
 snapshots/

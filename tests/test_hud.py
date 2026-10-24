@@ -428,7 +428,7 @@ class HudCase(unittest.TestCase):
                      "2026-10-24-083015.md", "2026-10-24-194500.md"):
             self.write_snapshot(snaps, name, name)
         env = self.base_env(HUD_SNAPS=str(snaps), HUD_PANEL=str(self.panel))
-        r = self.run_ctl("prune", "--keep", "2", env=env)
+        r = self.run_ctl("prune", "--keep", "2", "--yes", env=env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual({p.name for p in snaps.glob("*.md")},
                          {"2026-10-24-083015.md", "2026-10-24-194500.md"})
@@ -438,7 +438,7 @@ class HudCase(unittest.TestCase):
         self.write_snapshot(snaps, "2026-10-24-101010.md", "正经快照")
         (snaps / "notes.md").write_text("随手记", encoding="utf-8")
         env = self.base_env(HUD_SNAPS=str(snaps), HUD_PANEL=str(self.panel))
-        r = self.run_ctl("prune", "--keep", "1", env=env)
+        r = self.run_ctl("prune", "--keep", "1", "--yes", env=env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((snaps / "notes.md").exists())
         self.assertTrue((snaps / "2026-10-24-101010.md").exists())

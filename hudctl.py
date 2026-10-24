@@ -5,12 +5,13 @@
 其后是注入正文。pre_llm_call 钩子每轮读它；本脚本只负责**人来操作**：
 
     python hudctl.py status                  # 看当前面板：作用范围、到期时间、剩多久
-    python hudctl.py check                   # 校验格式（缺元数据/到期写错/正文超长/已过期）
+    python hudctl.py check                   # 校验格式（缺元数据/到期写错/正文超长/未知键）
+    python hudctl.py check --json            # 机器可读：errors（真格式错）与 notices（状态提示）
     python hudctl.py set --ttl 12h           # 换正文并续期（正文从 --body 文件或 stdin 读）
-    python hudctl.py off / on                # 暂停 / 恢复注入（不删面板）
+    python hudctl.py off / on                # 暂停 / 恢复注入（不删面板；on --ttl 8h 顺手续期）
     python hudctl.py snapshot                # 存一份快照（同日多份加时间戳，不互相覆盖）
-    python hudctl.py restore latest --ttl 8h # 从快照恢复（指定日期取当天最新；只能人手动跑）
-    python hudctl.py prune --keep 14         # 只留最近 N 份快照
+    python hudctl.py restore latest --ttl 8h # 从快照恢复（恢复前自动拍 pre-restore 快照，拍不成拒绝恢复）
+    python hudctl.py prune --keep 14         # 只列出将被删除的旧快照；加 --yes 才真删
 
 设计边界：脚本不自动恢复、不自动续期——恢复必须是人手动执行（用户定的规矩）。
 """
@@ -23,12 +24,15 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NoReturn
 
 try:
-    import hud_panel  # 同目录；条目作用域解析
+    import hud_panel  # 同目录；元数据 + 条目作用域的唯一解析实现
 except Exception:  # pragma: no cover
     hud_panel = None
 
@@ -75,10 +79,15 @@ def parse_expiry(raw: str):
         return None
 
 
-META_KEYS = ("session_id", "expires_at", "title", "enabled")
+META_KEYS = hud_panel.META_KEYS if hud_panel is not None else (
+    "session_id", "expires_at", "title", "enabled")
+MAX_PANEL_BYTES = 200_000      # 与 hud_inject 同上限：超过这个大小就不是面板了
+MAX_BODY_CHARS = 1600          # 与 hud_inject.MAX_CHARS 同值：正文超限直接拒绝写入
 
 
 def _strip_comment(value: str) -> str:
+    if hud_panel is not None:
+        return hud_panel.strip_comment(value)
     for sep in (" #", "\t#"):
         idx = value.find(sep)
         if idx != -1:
@@ -86,10 +95,11 @@ def _strip_comment(value: str) -> str:
     return value.strip()
 
 
-def split_panel(text: str) -> tuple[dict[str, str], str]:
-    """与 hud_inject.parse_panel 同源：前 24 行连续元数据，空行/非元数据行结束元数据块。"""
-    meta, lines = {}, text.splitlines()
-    body_start = 0
+def _split_panel_ex(text: str) -> tuple[dict[str, str], str, list[str]]:
+    """(元数据, 正文, 未知键)。与 hud_inject 共用 hud_panel.split_meta，绝不各写一份。"""
+    if hud_panel is not None:
+        return hud_panel.split_meta(text)
+    meta, lines, body_start = {}, text.splitlines(), 0
     for i, line in enumerate(lines[:24]):
         stripped = line.strip()
         if not stripped:
@@ -105,10 +115,17 @@ def split_panel(text: str) -> tuple[dict[str, str], str]:
                 body_start = i + 1
                 continue
         break
-    return meta, "\n".join(lines[body_start:]).strip()
+    return meta, "\n".join(lines[body_start:]).strip(), []
 
 
-def read_panel(create: bool = True) -> tuple[dict[str, str], str]:
+def split_panel(text: str) -> tuple[dict[str, str], str]:
+    """与 hud_inject.parse_panel 同源：前 24 行连续元数据，空行/非元数据行结束元数据块。"""
+    meta, body, _unknown = _split_panel_ex(text)
+    return meta, body
+
+
+def read_panel_ex(create: bool = True) -> tuple[dict[str, str], str, list[str]]:
+    """(元数据, 正文, 未知键)。头部未知键必须能报出来：注入端会因此整块跳过。"""
     if not PANEL.exists() and not create:
         raise SystemExit(f"面板不存在：{PANEL}")
     if not PANEL.exists():
@@ -119,10 +136,21 @@ def read_panel(create: bool = True) -> tuple[dict[str, str], str]:
         else:
             raise SystemExit(f"面板不存在：{PANEL}（先 cp panel.example.md panel.md）")
     try:
+        size = PANEL.stat().st_size
+    except OSError as exc:
+        raise SystemExit(f"读不到面板：{PANEL}（{type(exc).__name__}）")
+    if size > MAX_PANEL_BYTES:
+        raise SystemExit(f"面板过大（{size} 字节 > {MAX_PANEL_BYTES}）：拒绝读取 {PANEL}")
+    try:
         raw = PANEL.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         raise SystemExit(f"面板不是合法 UTF-8：{PANEL}")
-    return split_panel(raw.lstrip("\ufeff"))
+    return _split_panel_ex(raw.lstrip("\ufeff"))
+
+
+def read_panel(create: bool = True) -> tuple[dict[str, str], str]:
+    meta, body, _unknown = read_panel_ex(create)
+    return meta, body
 
 
 def write_panel(meta: dict[str, str], body: str) -> None:
@@ -133,19 +161,80 @@ def write_panel(meta: dict[str, str], body: str) -> None:
     if "expires_at" not in meta:
         raise SystemExit("面板缺少 expires_at，无法写入（先补一行到期时间）")
     for key in META_KEYS:
-        if "\n" in meta[key] or "\r" in meta[key]:
+        if "\n" in meta.get(key, "") or "\r" in meta.get(key, ""):
             raise SystemExit(f"元数据 {key} 不能包含换行")
-    head = "\n".join(f"{k}: {meta[k]}" for k in META_KEYS)
+    head = "\n".join(f"{k}: {meta.get(k, '')}" for k in META_KEYS)
     if os.path.islink(PANEL):
         raise SystemExit(f"面板是符号链接，拒绝写入：{PANEL}")
     data = f"{head}\n\n{body}\n"
     tmp = PANEL.with_name(f"{PANEL.name}.{os.getpid()}.tmp")
-    tmp.write_text(data, encoding="utf-8")
-    os.replace(tmp, PANEL)  # 原子替换：注入端不会读到空/半截文件
+    try:
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, PANEL)  # 原子替换：注入端不会读到空/半截文件
+    finally:
+        if tmp.exists():        # 写失败也别在目录里留半份临时文件
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+@contextmanager
+def panel_lock(timeout: float = 10.0):
+    """面板读-改-写用的**同一把**文件锁（跨进程）。
+
+    set / off / on / scope / use / restore 都走它：没有锁时两个并发命令各自读到旧内容、
+    后写的那次会把前一次的更新整块覆盖掉（丢更新）。
+    """
+    lock_path = PANEL.with_name(PANEL.name + ".lock")
+    fh = None
+    try:
+        fh = open(lock_path, "a+b")
+        try:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                fh.write(b"\0")
+                fh.flush()
+        except OSError:
+            pass
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fh.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise SystemExit(f"面板被另一个进程锁住（{lock_path}），稍后重试")
+                time.sleep(0.05)
+        yield
+    finally:
+        if fh is not None:
+            try:
+                fh.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                fh.close()
+            except OSError:
+                pass
 
 
 def _hermes_home() -> Path:
-    """HERMES_HOME → %LOCALAPPDATA%/hermes → ~/.local/share/hermes（跨平台兜底）。"""
+    """与 hud_panel.hermes_home() 同一口径（HERMES_HOME → LOCALAPPDATA → XDG）。"""
+    if hud_panel is not None:
+        return Path(hud_panel.hermes_home())
     env = os.environ.get("HERMES_HOME")
     if env:
         return Path(env)
@@ -387,20 +476,29 @@ def _filter_coverage(profiles: list[dict], sessions: list[dict],
 
 
 def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
-    """(启用, 已过期, 范围, 到期时间是否非法)。到期非法按“全部不生效”算，与注入一致。"""
+    """(启用, 已过期, 范围, 到期时间是否非法)。到期非法按“全部不生效”算，与注入一致。
+
+    范围为空/缺省**不再**当成 any：注入端把「没写」视为无效并跳过，这边口径必须一致。
+    """
     enabled = meta.get("enabled", "true").lower() not in {"false", "0", "no", "off"}
     expires = parse_expiry(meta.get("expires_at", ""))
     invalid_expiry = expires is None
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     expired = invalid_expiry or bool(expires and expires <= datetime.now(CST))
-    scope = (meta.get("session_id") or "any").strip()
+    scope = (meta.get("session_id") or "").strip()
     return enabled, expired, scope, invalid_expiry
 
 
-def _coverage(body: str, meta: dict):
-    """对一份正文算覆盖：每个档的统计 + 每条会话的生效与否。"""
+def _coverage(body: str, meta: dict, unknown=()):
+    """对一份正文算覆盖：每个档的统计 + 每条会话的生效与否。
+
+    unknown 是头部未知键（注入端会因此整块跳过）；body 的围栏未闭合同样整块跳过——
+    这两条都得在盘点里体现，否则 impact 会报「生效」而实际一个字都注不进去。
+    """
     enabled, expired, panel_scope, invalid_expiry = _panel_state(meta)
+    unknown = list(unknown or [])
+    degenerate = hud_panel.degenerate_reason(body) if hud_panel is not None else "no-hud-panel"
     dbs = _state_dbs()
     if not dbs:
         raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
@@ -419,16 +517,22 @@ def _coverage(body: str, meta: dict):
             reason = ""
             if not enabled:
                 reason = "面板已暂停"
+            elif unknown:
+                reason = f"头部有未知键（{', '.join(unknown[:3])}），注入会整块跳过"
             elif invalid_expiry:
                 reason = "到期时间无法解析（注入会整块跳过）"
             elif expired:
                 reason = "面板已过期"
+            elif not panel_scope:
+                reason = "面板 session_id 为空（注入会跳过）"
             elif not declared:
                 reason = "该档没声明 pre_llm_call 钩子"
             elif not allowed:
                 reason = "该档没同意该钩子命令"
-            elif panel_scope not in {"", "any", "*"} and panel_scope != sid:
+            elif panel_scope not in {"any", "*"} and panel_scope != sid:
                 reason = "面板只指向别的会话"
+            elif degenerate:
+                reason = f"正文无法安全解析（{degenerate}），注入会整块跳过"
             kept, total = 1, 1
             if not reason and hud_panel is not None:
                 _, kept, total = hud_panel.filter_body(body, sid, profile)
@@ -456,9 +560,9 @@ def cmd_impact(args) -> int:
     want_profiles = parse_profile_filter(getattr(args, "profile_filter", None))
     want_kinds = parse_kind_filter(getattr(args, "kind_filter", None))
     filtered = bool(want_profiles or want_kinds)
-    meta, body = read_panel(create=False)
+    meta, body, unknown = read_panel_ex(create=False)
     enabled, expired, panel_scope, invalid_expiry = _panel_state(meta)
-    profiles_all, sessions_all = _coverage(body, meta)
+    profiles_all, sessions_all = _coverage(body, meta, unknown)
     failed_all = [p["profile"] for p in profiles_all if p.get("error")]
     total_all = sum(p["sessions"] for p in profiles_all)
     eff_all = sum(p["effective"] for p in profiles_all)
@@ -471,7 +575,7 @@ def cmd_impact(args) -> int:
         kinds[s.get("kind", "chat")] = kinds.get(s.get("kind", "chat"), 0) + 1
     payload = {
         "panel": {"scope": panel_scope, "enabled": enabled, "expired": expired,
-                  "invalid_expiry": invalid_expiry,
+                  "invalid_expiry": invalid_expiry, "unknown_meta": unknown,
                   "expires_at": meta.get("expires_at", ""),
                   "entries": len(hud_panel.entries(body)) if hud_panel else 0,
                   "filters": {"profiles": want_profiles, "kinds": want_kinds}},
@@ -519,7 +623,11 @@ def cmd_impact(args) -> int:
             mark = "生效" if s["effective"] else "不生效"
             print(f"  [{mark}] {s['id']:<26} {s['profile']:<12} {s['title']}"
                   + ("" if s["effective"] else f"  ← {s['reason']}"))
-    if panel_scope in {"", "any", "*"}:
+    if unknown:
+        print(f"\n⚠ 头部有未知键：{', '.join(unknown)}（注入端会整块跳过；改掉或删掉这些行）")
+    if not panel_scope:
+        print("\n⚠ 面板 session_id 为空：注入端视为无效并跳过（写 any 才作用于全部会话）")
+    elif panel_scope in {"any", "*"}:
         print("默认范围=any：包含以后新建的会话。要限定范围，给条目加 [scope: session:<id>] 或用 use/ set --session。")
     return 0 if not failed and not failed_all else 1
 
@@ -611,64 +719,78 @@ def cmd_scope(args) -> int:
     """改某一条的作用域：scope <条目号> all|session:id[,id]|profile:p[,p]|none"""
     if hud_panel is None:
         raise SystemExit("缺 hud_panel.py，无法解析条目")
-    meta, body = read_panel()
-    items = hud_panel.entries(body)
-    if not 1 <= args.entry <= len(items):
-        raise SystemExit(f"条目号超出范围：1..{len(items)}")
-    value = args.value.strip()
-    if "\n" in value or "\r" in value:
-        raise SystemExit("作用域值不能包含换行")
-    if value.lower() not in {"none", "all"}:
-        if hud_panel.parse_scope(value) is None:
+    with panel_lock():
+        meta, body = read_panel()
+        items = hud_panel.entries(body)
+        if not 1 <= args.entry <= len(items):
+            raise SystemExit(f"条目号超出范围：1..{len(items)}")
+        value = args.value.strip()
+        if "\n" in value or "\r" in value:
+            raise SystemExit("作用域值不能包含换行")
+        if value.lower() != "none" and hud_panel.parse_scope(value) is None:
             raise SystemExit(f"作用域写法不认：{value}（all / session:id[,id] / profile:p[,p] / none）")
-    lines = body.splitlines()
-    item = items[args.entry - 1]
-    first = lines[item["start"]]
-    m = hud_panel.ENTRY_RE.match(first)
-    marker = m.group(0) if m else ""
-    rest = re.sub(r"\[scope:[^\]]*\]", "", first[len(marker):], flags=re.IGNORECASE).lstrip()
-    tag = "" if value.lower() == "none" else f"[scope: {value}] "
-    lines[item["start"]] = marker + tag + rest
-    write_panel(meta, "\n".join(lines))
+        lines = body.splitlines()
+        item = items[args.entry - 1]
+        marker_m = hud_panel.ENTRY_RE.match(lines[item["start"]])
+        marker = marker_m.group(0) if marker_m else ""
+        rest = re.sub(r"\[scope:[^\]]*\]", "", lines[item["start"]][len(marker):],
+                      flags=re.IGNORECASE).lstrip()
+        tag = "" if value.lower() == "none" else f"[scope: {value}] "
+        block = [marker + tag + rest]
+        for idx in range(item["start"] + 1, item["end"]):
+            line = lines[idx]
+            if hud_panel.SCOPE_RE.match(line):
+                # 续行上的旧标注一并清掉：留两处标注会让整条失效
+                line = hud_panel.SCOPE_RE.sub("", line, count=1).rstrip()
+                if not line.strip():
+                    continue
+            block.append(line)
+        lines[item["start"]:item["end"]] = block
+        write_panel(meta, "\n".join(lines))
     print(f"第 {args.entry} 条作用域 → {value}")
     return 0
 
 
-def cmd_use(args) -> int:
-    """把面板指向另一个会话（按 id 或标题子串匹配）。"""
-    import sqlite3
-    dbs = _state_dbs()
-    if not dbs:
-        raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
-    rows = []
+def _session_index(dbs) -> list[tuple[str, str, str]]:
+    """所有档的全部会话 (id, 标题, 档)。**不截断**：use 的精确匹配不能被 limit 挡住。"""
+    rows: list[tuple[str, str, str]] = []
     for profile, db in dbs:
         try:
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         except sqlite3.Error:
             continue
         try:
-            part = con.execute(
-                "select id, title from sessions where coalesce(archived,0)=0 "
-                "order by last_activity_at desc limit 300"
-            ).fetchall()
+            part = con.execute("select id, title from sessions").fetchall()
         except sqlite3.Error:
             continue
         finally:
             con.close()
-        rows.extend((sid, title, profile) for sid, title in part)
-    target = args.target
-    hits = [r for r in rows if r[0] == target] or [r for r in rows if target.lower() in (r[1] or "").lower()]
+        rows.extend((sid, title or "", profile) for sid, title in part)
+    return rows
+
+
+def cmd_use(args) -> int:
+    """把面板指向另一个会话：先按 id 精确匹配**全部**会话，再退化为标题子串。"""
+    dbs = _state_dbs()
+    if not dbs:
+        raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
+    target = args.target.strip()
+    if not target:
+        raise SystemExit("目标不能为空：给会话 id 或标题关键字")
+    rows = _session_index(dbs)
+    hits = [r for r in rows if r[0] == target] or [r for r in rows if target.lower() in r[1].lower()]
     if not hits:
         raise SystemExit(f"没找到会话：{target}（先跑 `python hudctl.py sessions`）")
     if len(hits) > 1:
         listing = "\n".join(f"  {sid}  [{prof}] {title}" for sid, title, prof in hits[:8])
         raise SystemExit(f"匹配到多个会话，请给完整 id：\n{listing}")
     sid, title, _prof = hits[0]
-    meta, body = read_panel()
-    meta["session_id"] = sid
-    meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
-    meta["enabled"] = "true"
-    write_panel(meta, body)
+    with panel_lock():
+        meta, body = read_panel()
+        meta["session_id"] = sid
+        meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
+        meta["enabled"] = "true"
+        write_panel(meta, body)
     print(f"已挂到：{sid}（{title}） 到期 {meta['expires_at']}")
     return 0
 
@@ -690,24 +812,63 @@ def cmd_status(_args) -> int:
     return 0
 
 
+def _die(message: str, code: int = 2) -> NoReturn:
+    """命令行拒绝：打到 stderr 并用指定退出码（默认 2）退出。"""
+    print(f"✗ {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def _read_body_file(path: Path) -> str:
+    if not path.is_file():
+        _die(f"正文文件不存在：{path}")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        _die(f"读不到正文文件：{path}（{type(exc).__name__}）")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        _die(f"正文不是合法 UTF-8：{path}（另存为 UTF-8 再试）")
+    return text.lstrip("\ufeff").strip()
+
+
 def cmd_set(args) -> int:
-    meta, body = read_panel()
-    if args.session:
-        meta["session_id"] = args.session
-    if args.title:
-        meta["title"] = args.title
-    if args.body:
-        body_path = Path(args.body)
-        if not body_path.is_file():
-            raise SystemExit(f"正文文件不存在：{body_path}")
-        body = body_path.read_text(encoding="utf-8").lstrip("\ufeff").strip()
-    elif not sys.stdin.isatty():
-        incoming = sys.stdin.read().strip()
-        if incoming:
-            body = incoming
-    meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
-    meta["enabled"] = "true"
-    write_panel(meta, body)
+    with panel_lock():
+        meta, body = read_panel()
+        if args.session:
+            if any(ch.isspace() for ch in args.session):
+                _die(f"session_id 不能含空白：{args.session!r}（写 any 或具体会话 id）")
+            meta["session_id"] = args.session
+        if args.title:
+            meta["title"] = args.title
+        # 元数据先行校验：坏元数据必须立刻拒绝，不能等写完正文才发现
+        for key in META_KEYS:
+            if "\n" in meta.get(key, "") or "\r" in meta.get(key, ""):
+                _die(f"元数据 {key} 不能包含换行")
+        if args.body:
+            body = _read_body_file(Path(args.body))
+        elif not sys.stdin.isatty():
+            try:
+                incoming = sys.stdin.read()
+            except UnicodeDecodeError:
+                _die("stdin 不是合法 UTF-8（用 --body 指定 UTF-8 文件）")
+            body = incoming.lstrip("\ufeff").strip()
+        else:
+            # TTY 且没给正文：不阻塞等输入，直接提示怎么用
+            _die("没有正文：用 --body <文件>，或从管道喂入"
+                 "（例：cat body.md | python hudctl.py set --ttl 8h）")
+        if not body:
+            _die("正文为空：注入端会整块跳过，拒绝写入")
+        if len(body) > MAX_BODY_CHARS:
+            _die(f"正文 {len(body)} 字，超过上限 {MAX_BODY_CHARS} 字（注入端会截断）")
+        expires = datetime.now(CST) + parse_ttl(args.ttl)
+        estimate = estimate_block(meta, body, expires)
+        if estimate > MAX_BLOCK_CHARS:
+            _die(f"注入块约 {estimate} 字（含标题行/尾行/提醒余量），超过 {MAX_BLOCK_CHARS} 上限："
+                 f"正文再减 {estimate - MAX_BLOCK_CHARS} 字")
+        meta["expires_at"] = expires.isoformat(timespec="seconds")
+        meta["enabled"] = "true"
+        write_panel(meta, body)
     print(f"已更新：范围={meta['session_id']} 到期={meta['expires_at']} 正文={len(body)} 字")
     return 0
 
@@ -735,20 +896,31 @@ def estimate_block(meta: dict[str, str], body: str, expires) -> int:
     return len(header) + len(body) + len(tail) + 2 + BLOCK_MARGIN
 
 
-def cmd_check(_args) -> int:
-    """校验面板格式；有问题返回 1，方便放进门禁/CI。"""
-    problems = []
+def cmd_check(args) -> int:
+    """校验面板格式：**只有真格式错**让 exit code 变 1；过期/暂停/范围不匹配是「状态提示」。
+
+    状态提示不算失败：面板过期是正常状态（注入会跳过），把它当机制坏了的判据就是假红。
+    """
+    errors: list[str] = []
+    notices: list[str] = []
     if not PANEL.exists():
         print(f"✗ 面板不存在：{PANEL}")
         return 1
     try:
+        if PANEL.stat().st_size > MAX_PANEL_BYTES:
+            print(f"✗ 面板过大（>{MAX_PANEL_BYTES} 字节）：{PANEL}")
+            return 1
         raw = PANEL.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         print(f"✗ 面板不是合法 UTF-8：{PANEL}")
         return 1
+    except OSError as exc:
+        print(f"✗ 读不到面板：{PANEL}（{type(exc).__name__}）")
+        return 1
     if raw.startswith("\ufeff"):
-        problems.append("文件带 BOM（注入端能容忍，但建议去掉）")
-    raw = raw.lstrip("\ufeff")
+        notices.append("文件带 BOM（注入端能容忍，建议去掉）")
+        raw = raw.lstrip("\ufeff")
+
     seen: set[str] = set()
     for line in raw.splitlines()[:24]:
         if not line.strip():
@@ -758,52 +930,99 @@ def cmd_check(_args) -> int:
         if not sep or name not in META_KEYS:
             break
         if name in seen:
-            problems.append(f"重复元数据：{name}")
+            errors.append(f"重复元数据：{name}")
         seen.add(name)
         if any(ord(ch) < 32 for ch in value):
-            problems.append(f"元数据 {name} 含控制字符")
-    meta, body = split_panel(raw)
+            errors.append(f"元数据 {name} 含控制字符")
+
+    meta, body, unknown = _split_panel_ex(raw)
+    if unknown:
+        errors.append(f"头部未知键：{', '.join(unknown)}"
+                      "（未知键会让整块失效：注入端直接跳过，绝不把元数据当正文注入）")
     for key in META_KEYS:
         if key not in meta:
-            problems.append(f"缺少元数据：{key}")
-    scope = meta.get("session_id", "")
-    if scope and scope not in {"any", "*"} and len(scope) < 8:
-        problems.append(f"session_id 看起来不像会话 id：{scope!r}")
+            errors.append(f"缺少元数据：{key}")
+    scope = (meta.get("session_id") or "").strip()
+    if "session_id" in meta and not scope:
+        errors.append("session_id 为空（空值=无效，注入端会跳过；作用于全部要写 any）")
+    elif scope and scope.lower() not in {"any", "*"} and len(scope) < 8:
+        notices.append(f"session_id 看起来不像会话 id：{scope!r}")
     enabled = meta.get("enabled", "true").lower()
     if enabled not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
-        problems.append(f"enabled 取值不合法：{meta.get('enabled')!r}")
+        errors.append(f"enabled 取值不合法：{meta.get('enabled')!r}")
+    elif enabled in {"false", "0", "no", "off"}:
+        notices.append("面板已暂停（enabled=false）：注入会被跳过（hudctl on 恢复）")
     expires = parse_expiry(meta.get("expires_at", ""))
     if expires is None:
-        problems.append(f"expires_at 无法解析：{meta.get('expires_at')!r}")
+        errors.append(f"expires_at 无法解析：{meta.get('expires_at')!r}")
     else:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=CST)
         if expires <= datetime.now(CST):
-            problems.append(f"面板已过期：{meta.get('expires_at')}（注入会被跳过）")
+            notices.append(f"面板已过期：{meta.get('expires_at')}（注入会被跳过；on --ttl 8h 可续期）")
+    if scope and scope.lower() not in {"any", "*"}:
+        notices.append(f"面板只作用于会话 {scope}：其它会话不会注入")
     if not body:
-        problems.append("正文为空")
-    if hud_panel is not None:
-        problems.extend(hud_panel.validate(body))
+        errors.append("正文为空：注入端会跳过")
+    if hud_panel is None:
+        errors.append("缺 hud_panel.py：无法解析条目（注入端也会整块跳过）")
+    else:
+        degenerate = hud_panel.degenerate_reason(body)
+        if degenerate:
+            errors.append(f"代码围栏未闭合（{degenerate}）：条目边界不可信，注入端会整块跳过")
+        errors.extend(hud_panel.validate(body))
     estimate = estimate_block(meta, body, expires)
     if estimate > MAX_BLOCK_CHARS:
-        problems.append(f"注入块约 {estimate} 字（标题行 + 正文 + 注入尾行，另含 "
-                        f"{BLOCK_MARGIN} 字提醒余量），超过 {MAX_BLOCK_CHARS} 上限（会被截断）")
-    if problems:
-        print("✗ 面板有问题：")
-        for p in problems:
-            print("  - " + p)
-        return 1
-    print(f"✓ 面板正常：范围={scope or 'any'} 到期={meta['expires_at']} 正文={len(body)} 字"
-          f"（整块约 {estimate} 字 / 上限 {MAX_BLOCK_CHARS}）")
-    return 0
+        errors.append(f"注入块约 {estimate} 字（标题行 + 正文 + 注入尾行，另含 "
+                      f"{BLOCK_MARGIN} 字提醒余量），超过 {MAX_BLOCK_CHARS} 上限（会被截断）")
+
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": not errors, "errors": errors, "notices": notices,
+                          "scope": scope, "expires_at": meta.get("expires_at", ""),
+                          "body_chars": len(body), "estimate": estimate},
+                         ensure_ascii=False, indent=2))
+    else:
+        if errors:
+            print("✗ 面板格式有问题：")
+            for item in errors:
+                print("  - " + item)
+        for item in notices:
+            print("  · 状态提示：" + item)
+        if not errors:
+            print(f"✓ 面板格式正常：范围={scope or 'any'} 到期={meta.get('expires_at')} "
+                  f"正文={len(body)} 字（整块约 {estimate} 字 / 上限 {MAX_BLOCK_CHARS}）")
+    strict_fail = bool(notices) and getattr(args, "strict", False)
+    return 1 if errors or strict_fail else 0
+
+
+def _is_expired(meta: dict) -> bool:
+    """到期时间不可解析也算「过期」（注入端会跳过）。"""
+    expires = parse_expiry(meta.get("expires_at", ""))
+    if expires is None:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=CST)
+    return expires <= datetime.now(CST)
 
 
 def cmd_toggle(flag: str):
-    def run(_args) -> int:
-        meta, body = read_panel()
-        meta["enabled"] = flag
-        write_panel(meta, body)
-        print(f"enabled={flag}")
+    def run(args) -> int:
+        with panel_lock():
+            meta, body = read_panel()
+            if flag == "true":
+                ttl = getattr(args, "ttl", None)
+                if ttl:
+                    meta["expires_at"] = (datetime.now(CST) + parse_ttl(ttl)).isoformat(timespec="seconds")
+                elif _is_expired(meta):
+                    _die(f"面板已过期（{meta.get('expires_at', '?')}）：直接 on 只是打开一个永不生效的面板。"
+                         "顺手续期用 hudctl on --ttl 8h（或 set 换正文+续期）")
+                if not (body or "").strip():
+                    _die("正文为空：on 之后注入端仍会跳过；先用 set --body <文件> 写入正文")
+                if not (meta.get("session_id") or "").strip():
+                    _die("session_id 为空：on 之后注入端仍会跳过；用 set --session any 或具体会话 id 补上")
+            meta["enabled"] = flag
+            write_panel(meta, body)
+        print(f"enabled={flag}" + (f" 到期={meta['expires_at']}" if flag == "true" else ""))
         return 0
     return run
 
@@ -854,17 +1073,44 @@ def _snapshot_target(now: datetime) -> Path:
     return candidate
 
 
-def cmd_snapshot(_args) -> int:
-    SNAPS.mkdir(exist_ok=True)
-    meta, body = read_panel()
-    target = _snapshot_target(datetime.now(CST))
+def _snapshot_to(target: Path) -> Path:
+    """原子地把当前面板复制成 target；失败时抛 OSError 并清掉临时文件。"""
     tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
         shutil.copy2(PANEL, tmp)
         os.replace(tmp, target)  # 原子落盘：不留半份快照，也不覆盖已有快照
     finally:
         if tmp.exists():
-            tmp.unlink()
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    return target
+
+
+def _pre_restore_target(now: datetime) -> Path:
+    """恢复前的「现场」快照：名字带 pre-restore 前缀 + 时间戳。
+
+    刻意**不**用 `YYYY-MM-DD.md` 命名：它不参与 `restore latest`、也不被 prune 当快照处理，
+    这样「恢复前的现场」不会顶掉用户真正的快照序列，两者在目录里一眼可分。
+    """
+    stamp = f"pre-restore-{now.strftime('%Y-%m-%d-%H%M%S')}"
+    candidate = SNAPS / f"{stamp}.md"
+    seq = 1
+    while candidate.exists() or candidate.is_symlink():
+        seq += 1
+        candidate = SNAPS / f"{stamp}-{seq}.md"
+    return candidate
+
+
+def cmd_snapshot(_args) -> int:
+    SNAPS.mkdir(exist_ok=True)
+    _meta, body = read_panel()
+    target = _snapshot_target(datetime.now(CST))
+    try:
+        _snapshot_to(target)
+    except OSError as exc:
+        raise SystemExit(f"快照失败（{type(exc).__name__}: {exc}）：{SNAPS} 不可写？")
     print(f"快照：{target}（{len(body)} 字）")
     return 0
 
@@ -888,27 +1134,66 @@ def cmd_restore(args) -> int:
         if not same_day:
             raise SystemExit(f"没有这份快照：{args.date}（{SNAPS} 下没有该日快照）")
         target = same_day[-1]  # 同日多份 → 取最新一份
-    meta, body = split_panel(target.read_text(encoding="utf-8"))
+    try:
+        meta, body = split_panel(target.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        raise SystemExit(f"快照不是合法 UTF-8：{target}")
     if args.session:
         meta["session_id"] = args.session
     meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
     meta["enabled"] = "true"
-    write_panel(meta, body)
-    print(f"已从 {target.name} 恢复：范围={meta['session_id']} 到期={meta['expires_at']} 正文={len(body)} 字")
+    with panel_lock():
+        pre = None
+        if PANEL.exists():
+            try:
+                pre = _snapshot_to(_pre_restore_target(datetime.now(CST)))
+            except OSError as exc:
+                # 拍不成现场快照就不恢复：恢复是不可逆覆盖，没有退路的事不做
+                _die(f"恢复前快照写不进去（{type(exc).__name__}: {exc}），拒绝恢复。"
+                     f"先确认 {SNAPS} 可写")
+        write_panel(meta, body)
+    said = f"（恢复前现场已存：{pre.name}）" if pre else "（当前没有面板，无需 pre-restore 快照）"
+    print(f"已从 {target.name} 恢复：范围={meta['session_id']} 到期={meta['expires_at']} "
+          f"正文={len(body)} 字 {said}")
     return 0
 
 
 def cmd_prune(args) -> int:
+    """默认只列清单；加 --yes 才真删。只动本工具命名的快照，手工 .md 一律不碰。"""
     if args.keep < 1:
         raise SystemExit(f"--keep 必须 >= 1：{args.keep}")
     snaps = _snapshots()  # 新旧两种命名混排，按文件名里的时间从旧到新
     drop = snaps[: max(0, len(snaps) - args.keep)]
-    for path in drop:
-        path.unlink()
-    print(f"保留 {min(args.keep, len(snaps))} 份，删除 {len(drop)} 份")
-    strays = sum(1 for _ in SNAPS.glob("*.md")) - len(snaps) if SNAPS.is_dir() else 0
-    if strays > 0:
-        print(f"（另有 {strays} 个非快照命名的 .md：不计入、未删除）")
+    strays = []
+    if SNAPS.is_dir():
+        strays = sorted(p.name for p in SNAPS.glob("*.md") if _snapshot_key(p) is None)
+    if not args.yes:
+        print(f"将保留最近 {min(args.keep, len(snaps))} 份，待删除 {len(drop)} 份（未删除）")
+        for path in drop:
+            print(f"  - {path.name}")
+        if drop:
+            print("加 --yes 才真删：python hudctl.py prune --keep "
+                  f"{args.keep} --yes")
+        else:
+            print("没有需要删除的快照。")
+    else:
+        deleted = 0
+        for path in drop:
+            if _snapshot_key(path) is None:   # 双保险：只删本工具命名的快照
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError as exc:
+                raise SystemExit(f"删不掉 {path.name}：{type(exc).__name__}")
+        print(f"保留 {min(args.keep, len(snaps))} 份，删除 {deleted} 份")
+    restored = [name for name in strays if name.startswith("pre-restore-")]
+    manual = [name for name in strays if not name.startswith("pre-restore-")]
+    if restored:
+        print(f"（恢复前现场快照 {len(restored)} 份：不参与 latest / 不计入 prune，需要时自行清理）")
+    if manual:
+        print(f"（另有 {len(manual)} 个非本工具命名的 .md，是手工文件：不计入快照、也不删除："
+              f"{', '.join(manual[:5])}{' …' if len(manual) > 5 else ''}）")
     return 0
 
 
@@ -946,9 +1231,15 @@ def main() -> int:
     p_set.add_argument("--title")
     p_set.add_argument("--body", help="正文文件路径；不给则读 stdin")
     p_set.set_defaults(func=cmd_set)
-    sub.add_parser("check").set_defaults(func=cmd_check)
+    p_check = sub.add_parser("check")
+    p_check.add_argument("--json", action="store_true", help="机器可读：errors / notices 分开")
+    p_check.add_argument("--strict", action="store_true",
+                         help="状态提示（过期/暂停/范围不匹配）也算失败")
+    p_check.set_defaults(func=cmd_check)
     sub.add_parser("off").set_defaults(func=cmd_toggle("false"))
-    sub.add_parser("on").set_defaults(func=cmd_toggle("true"))
+    p_on = sub.add_parser("on")
+    p_on.add_argument("--ttl", default=None, help="顺手续期（例：8h）；不给则沿用原到期时间")
+    p_on.set_defaults(func=cmd_toggle("true"))
     sub.add_parser("snapshot").set_defaults(func=cmd_snapshot)
     p_restore = sub.add_parser("restore")
     p_restore.add_argument("date", help="YYYY-MM-DD 或 latest")
@@ -957,6 +1248,7 @@ def main() -> int:
     p_restore.set_defaults(func=cmd_restore)
     p_prune = sub.add_parser("prune")
     p_prune.add_argument("--keep", type=int, default=14)
+    p_prune.add_argument("--yes", action="store_true", help="真的删除（不加只列清单）")
     p_prune.set_defaults(func=cmd_prune)
     args = ap.parse_args()
     return args.func(args)
