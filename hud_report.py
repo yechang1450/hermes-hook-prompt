@@ -105,7 +105,7 @@ def main() -> int:
     print(f"统计区间：{since or '全部'}　总行数 {total}\n")
     print(f"{'档':<14}{'注入':>6}{'跳过':>6}  首次注入             最后注入")
     for prof in sorted(inj, key=lambda p: -inj[p]):
-        print(f"{prof:<14}{inj[prof]:>6}{sum(skip[prof].values()):>6}  {first[prof][:19]:<20} {last[prof][:19]}")
+        print(f"{prof:<14}{inj[prof]:>6}{sum(skip.get(prof, {}).values()):>6}  {first[prof][:19]:<20} {last[prof][:19]}")
     if filtered_rounds or invalid_scope_hits:
         print(f"\n作用域过滤：{filtered_rounds} 轮有条目被筛掉"
               + (f"（按档：{'，'.join(f'{k} {v}' for k, v in sorted(filtered_by_prof.items()))}）"
