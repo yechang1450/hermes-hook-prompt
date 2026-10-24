@@ -56,6 +56,9 @@ def main() -> int:
     last: dict[str, str] = {}
     recent: list[str] = []
     total = 0
+    filtered_rounds = 0          # 有条目被作用域过滤掉的注入轮次
+    filtered_by_prof: dict[str, int] = defaultdict(int)
+    invalid_scope_hits = 0       # 非法 [scope:] 出现次数（含被整块跳过的轮次）
 
     sources = [p for p in (LOG.with_name(LOG.name + ".1"), LOG) if p.exists()]
     lines_all: list[str] = []
@@ -71,11 +74,18 @@ def main() -> int:
         total += 1
         mprof = re.search(r"profile=(\S+)", rest)
         prof = mprof.group(1) if mprof else "-"
+        bad = re.search(r"invalid_scope=(\d+)", rest)
+        if bad:
+            invalid_scope_hits += int(bad.group(1))
         if kind == "inject":
             inj[prof] += 1
             first.setdefault(prof, ts)
             last[prof] = ts
             recent.append(raw.strip())
+            me = re.search(r"entries=(\d+)/(\d+)", rest)
+            if me and int(me.group(1)) < int(me.group(2)):
+                filtered_rounds += 1
+                filtered_by_prof[prof] += 1
         else:
             reason = rest.split()[0] if rest else "?"
             skip[prof][reason] += 1
@@ -85,6 +95,11 @@ def main() -> int:
     print(f"{'档':<14}{'注入':>6}{'跳过':>6}  首次注入             最后注入")
     for prof in sorted(inj, key=lambda p: -inj[p]):
         print(f"{prof:<14}{inj[prof]:>6}{sum(skip[prof].values()):>6}  {first[prof][:19]:<20} {last[prof][:19]}")
+    if inj:
+        print(f"\n作用域过滤：{filtered_rounds} 轮有条目被筛掉"
+              + (f"（按档：{'，'.join(f'{k} {v}' for k, v in sorted(filtered_by_prof.items()))}）"
+                 if filtered_by_prof else "")
+              + (f"；非法 [scope:] 累计 {invalid_scope_hits} 处" if invalid_scope_hits else ""))
     if skip:
         print("\n跳过原因：")
         for prof, c in sorted(skip.items()):

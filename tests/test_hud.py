@@ -457,6 +457,21 @@ class HudCase(unittest.TestCase):
         self.assertIn("default", r.stdout)
         self.assertIn("inject", self.log.read_text(encoding="utf-8"))
 
+    def test_report_scope_filter_summary(self):
+        self.write_panel()
+        self.log.write_text(
+            "2026-10-24T10:00:00+08:00 inject session=a profile=default chars=100 entries=1/3\n"
+            "2026-10-24T10:01:00+08:00 inject session=b profile=ceo chars=100 entries=3/3\n"
+            "2026-10-24T10:02:00+08:00 skip no-entry-for-session session=c profile=draft entries=1 invalid_scope=1\n",
+            encoding="utf-8")
+        env = self.base_env(HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("作用域过滤：1 轮", r.stdout)
+        self.assertIn("非法 [scope:] 累计 1 处", r.stdout)
+
     def test_report_bad_since(self):
         env = self.base_env(HUD_LOG=str(self.log))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py"), "--since", "10-22"],
