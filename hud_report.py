@@ -56,6 +56,7 @@ def main() -> int:
     last: dict[str, str] = {}
     recent: list[str] = []
     total = 0
+    unparsed = 0                 # 格式不认识的行（BOM/旧时间格式等）——不能静默吞掉
     filtered_rounds = 0          # 有条目被作用域过滤掉的注入轮次
     filtered_by_prof: dict[str, int] = defaultdict(int)
     invalid_scope_hits = 0       # 非法 [scope:] 出现次数（含被整块跳过的轮次）
@@ -67,6 +68,7 @@ def main() -> int:
     for raw in lines_all:
         m = LINE.match(raw.strip())
         if not m:
+            unparsed += 1
             continue
         ts, kind, rest = m.group("ts"), m.group("kind"), m.group("rest")
         if since and ts[:10] < since:
@@ -79,6 +81,9 @@ def main() -> int:
         bad = re.search(r"\binvalid_scope=(\d+)", clean)
         if bad:
             invalid_scope_hits += int(bad.group(1))
+        if kind not in {"inject", "skip"}:
+            unparsed += 1
+            continue
         if kind == "inject":
             inj[prof] += 1
             first.setdefault(prof, ts)
@@ -106,6 +111,8 @@ def main() -> int:
               + (f"（按档：{'，'.join(f'{k} {v}' for k, v in sorted(filtered_by_prof.items()))}）"
                  if filtered_by_prof else "")
               + (f"；非法 [scope:] 累计 {invalid_scope_hits} 处" if invalid_scope_hits else ""))
+    if unparsed:
+        print(f"\n⚠ {unparsed} 行格式无法识别（已跳过，未计入统计）")
     if skip:
         print("\n跳过原因：")
         for prof in sorted(skip):

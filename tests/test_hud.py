@@ -487,6 +487,19 @@ class HudCase(unittest.TestCase):
         self.assertNotIn("非法 [scope:]", r.stdout)
         self.assertIn("default", r.stdout)
 
+    def test_report_flags_unparsed_lines(self):
+        self.write_panel()
+        self.log.write_text(
+            "2026-10-24T10:00:00+08:00 inject session=a profile=default chars=100 entries=1/1\n"
+            "这不是日志行\n",
+            encoding="utf-8")
+        env = self.base_env(HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("1 行格式无法识别", r.stdout)
+
     def test_report_bad_since(self):
         env = self.base_env(HUD_LOG=str(self.log))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py"), "--since", "10-22"],
