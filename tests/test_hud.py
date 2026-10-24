@@ -1,6 +1,6 @@
 """tests/test_hud.py — 纯标准库单元测试（python -m unittest discover -s tests）。
 
-每个用例把三个脚本复制到临时目录再跑，避免碰到仓库里真实的 panel.md / hud.log。
+每个用例把四个脚本与面板样例复制到临时目录再跑，避免碰到仓库里真实的 panel.md / hud.log。
 """
 import json
 import os

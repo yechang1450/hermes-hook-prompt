@@ -4,7 +4,7 @@
 
 给 [Hermes Agent](https://hermes-agent.nousresearch.com/docs) 装一块**每轮都摆在模型眼前**的提示面板：一段文字，每轮自动注入，带时效、可限会话、随时可改。
 
-全部用 Hermes **官方机制**实现——没有改源码、没有打补丁、没有包装外层。仓库里只有三个 Python 脚本（纯标准库）和一份面板样例。
+全部用 Hermes **官方机制**实现——没有改源码、没有打补丁、没有包装外层。仓库里是五个 Python 脚本（`hud_inject` / `hudctl` / `hud_panel` / `hud_report` / `selfcheck`，纯标准库）和一份面板样例。
 
 > 它要解决的问题：`.hermes.md` / `AGENTS.md` / SOUL / 长期记忆都是**静态**的——写进去就一直占着上下文，改一次要等新会话，还很难「只在接下来 12 小时里生效」。而很多临时提醒（这周别动 X、今天先做 Y、按某个口径回答）恰恰只需要活一段时间。
 
@@ -48,7 +48,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 
 ## 二、安装
 
-要求：Python 3.10+（只用标准库；CI 覆盖 3.10 / 3.12），Hermes 能正常启动。仓库＝三个脚本 + 一份面板样例。
+要求：Python 3.10+（只用标准库；CI 覆盖 3.10 / 3.12），Hermes 能正常启动。仓库＝五个脚本 + 一份面板样例。
 实测环境：Windows 11、Hermes v0.22.2、Python 3.14.7。
 
 ```bash
@@ -96,7 +96,7 @@ enabled: true                                  # off 即暂停，不用删配置
 （空行之后是正文，原样注入）
 ```
 
-正文建议控制在 **1000 字以内**（注入块硬上限 1600 字：标题行 + 正文 + 注入尾行，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，视环境而定，本机常在 0.3–0.6s（慢盘/杀软下更久）。
+正文建议控制在 **1200 字以内**（注入块硬上限 1600 字：标题行 + 正文 + 注入尾行，超出截断）。按 ¥2/百万 token 粗算，1200 字约 720–840 token ≈ **¥0.0014–0.0017/轮**；另外每轮多一次 Python 启动，本机 5 次实测 0.15–0.6 s，中位约 0.2 s（慢盘/杀软下更久）。
 
 ### 3.1 作用范围：默认全部（含以后新建的会话）
 
@@ -149,7 +149,7 @@ python hudctl.py impact --profile default,ceo --kinds chat,cron  # 只看指定�
 
 ## 四、日常操作（`hudctl.py`）
 
-面板正文是**压缩版**（约 540 字；完整措辞存档在 `docs/panel-full-text.md`，规则条数与约束一一对应）。
+面板正文是**压缩版**（现行正文 1156 字、整块约 1340 字，以 `hudctl.py status` 为准；完整措辞存档在 `docs/panel-full-text.md`，规则条数与约束一一对应）。
 
 注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向 OTUI（`build/open-tui-orchestrator`）。
 
@@ -210,7 +210,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-68 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+73 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -234,13 +234,13 @@ python -m unittest discover -s tests -v
 | 文件 | 作用 |
 |---|---|
 | `hud_inject.py` | `pre_llm_call` 钩子本体：读面板 → 判会话/时效 → 输出 `{"context": …}` |
-| `hudctl.py` | 人来操作面板：status / set / off / on / snapshot / restore / sessions / use / prune / impact / scope |
+| `hudctl.py` | 人来操作面板：status / set / off / on / snapshot / restore / check / preview / sessions / use / prune / impact / scope |
 | `hud_panel.py` | 条目作用域解析（`[scope: …]`）与正文过滤，inject/ctl 共用 |
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
 | `selfcheck.py` | Hermes 更新后的机制体检（6 项），写 `state/selfcheck.json` |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/` | 单元测试（标准库 unittest）：`test_hud.py` 主流程、`test_selfcheck.py` 机制自检、`test_scope.py` 作用域与 impact、`test_scope_regressions.py` 缺陷回归 |
+| `tests/` | 单元测试（标准库 unittest，共 73）：`test_hud.py` 主流程（48）、`test_selfcheck.py` 机制自检（2）、`test_scope.py` 作用域与 impact（10）、`test_scope_regressions.py` 缺陷回归（13） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 

@@ -4,11 +4,13 @@
 
 | 组件 | 读 | 写 | 网络 |
 |---|---|---|---|
-| `hud_inject.py`（每轮由 Hermes 调起） | `panel.md` | `hud.log`（只记 session_id / profile / 字数 / 跳过原因） | 无 |
-| `hudctl.py`（人来跑） | `panel.md`、`snapshots/`、`state.db`（**只读模式** `mode=ro`） | `panel.md`、`snapshots/` | 无 |
+| `hud_inject.py`（每轮由 Hermes 调起） | `panel.md`、`state/selfcheck.json`（只读机制指纹） | `hud.log`（只记 session_id / profile / 字数 / 跳过原因） | 无 |
+| `hudctl.py`（人来跑） | `panel.md`、`snapshots/`、`state.db`（**只读模式** `mode=ro`）、各档 `config.yaml` 与 `shell-hooks-allowlist.json`（`impact` 只读） | `panel.md`、`snapshots/` | 无 |
 | `hud_report.py`（人来跑） | `hud.log`、`panel.md` | 无 | 无 |
+| `hud_panel.py`（被上面几个 import 的解析件） | 无（只解析传入的正文） | 无 | 无 |
+| `selfcheck.py`（人来跑） | `panel.md`、Hermes 源码（`agent/`、`hermes_cli/`）、本档 `config.yaml`、`shell-hooks-allowlist.json` | `state/selfcheck.json` | 无 |
 
-没有第三方依赖，没有子进程，没有遥测，不会把任何内容发到外部。
+没有第三方依赖，没有遥测，不会把任何内容发到外部；唯一起子进程的是 `selfcheck.py`（调 `hud_inject.py` 与 `hudctl.py check` 做端到端自检），两个子进程都是本仓库脚本。
 
 ## 信任边界（重要）
 
@@ -30,7 +32,7 @@
 
 ## 已知的非安全问题
 
-- 钩子脚本每轮启动一次 Python（本机实测约 60 ms），属预期成本；
+- 钩子脚本每轮启动一次 Python（本机 5 次实测 0.15–0.6 s，中位约 0.2 s），属预期成本；
 - 钩子失败时静默放行（fail-open），不会拦住对话——这是 Hermes 对 `pre_llm_call` 的默认语义；
 - 面板里写的规则只是**提醒**，不是强制；要强制得用 `pre_tool_call`（本项目不提供，因为概念型规则无法可靠判定）。
 

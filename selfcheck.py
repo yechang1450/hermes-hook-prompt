@@ -3,7 +3,7 @@
 
 Hermes 每次更新后，官方 hooks 的实现细节可能变化。本脚本做一次「机制体检」：
 
-  1. 源码：`agent/shell_hooks.py` 仍认识 `pre_llm_call` 事件
+  1. 源码：跨 `agent/*.py` 与 `hermes_cli/*.py` 搜 `pre_llm_call` 落点（事件可能换文件）
   2. 源码：`agent/turn_context.py` 仍把 hook 返回值当 `plugin_user_context` 注入
   3. 配置：本档 config.yaml 有 `hooks.pre_llm_call` 且指向 `hud_inject.py`
   4. 同意：allowlist 里有 `pre_llm_call` + 该命令的批准记录
