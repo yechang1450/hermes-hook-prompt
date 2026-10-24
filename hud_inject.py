@@ -190,10 +190,13 @@ def main() -> int:
         log(f"skip empty-body session={session_id} profile={profile}")
         return 0
     kept, total = 1, 1
+    bad_scopes = 0
     if hud_panel is not None:
+        bad_scopes = len(hud_panel.invalid_scopes(body))
         body, kept, total = hud_panel.filter_body(body, session_id, profile)
         if kept == 0:
-            log(f"skip no-entry-for-session session={session_id} profile={profile} entries={total}")
+            log(f"skip no-entry-for-session session={session_id} profile={profile} "
+                f"entries={total} invalid_scope={bad_scopes}")
             return 0
     title = meta.get("title", "会话面板")
     stamp = expires.astimezone(CST).strftime("%m-%d %H:%M")
@@ -207,7 +210,8 @@ def main() -> int:
         block += "\n" + note
     if len(block) > MAX_CHARS:
         block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"
-    log(f"inject session={session_id} profile={profile} chars={len(block)} entries={kept}/{total}")
+    log(f"inject session={session_id} profile={profile} chars={len(block)} "
+        f"entries={kept}/{total}" + (f" invalid_scope={bad_scopes}" if bad_scopes else ""))
     print(json.dumps({"context": block}, ensure_ascii=True))
     return 0
 

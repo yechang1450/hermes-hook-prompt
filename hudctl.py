@@ -107,7 +107,9 @@ def split_panel(text: str) -> tuple[dict[str, str], str]:
     return meta, "\n".join(lines[body_start:]).strip()
 
 
-def read_panel() -> tuple[dict[str, str], str]:
+def read_panel(create: bool = True) -> tuple[dict[str, str], str]:
+    if not PANEL.exists() and not create:
+        raise SystemExit(f"面板不存在：{PANEL}")
     if not PANEL.exists():
         sample = ROOT / "panel.example.md"
         if sample.exists():
@@ -218,47 +220,95 @@ def _profile_allow(profile: str) -> Path:
             else home / "profiles" / profile / "shell-hooks-allowlist.json")
 
 
+def _hook_commands(profile: str) -> list[str]:
+    """config 里未注释的、command 指向 hud_inject 的钩子命令。"""
+    try:
+        text = _profile_cfg(profile).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "hud_inject" not in stripped:
+            continue
+        m = re.search(r"command:\s*[\"']?(.+?)[\"']?\s*$", stripped)
+        if m:
+            out.append(m.group(1).strip())
+    return out
+
+
+def _allowed_commands(profile: str) -> set[str]:
+    """allowlist 里 pre_llm_call 且指向 hud_inject 的命令（精确字符串，与 Hermes 同口径）。"""
+    try:
+        data = json.loads(_profile_allow(profile).read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return set()
+    out = set()
+    for entry in (data.get("approvals") or []) if isinstance(data, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("event") != "pre_llm_call":
+            continue
+        command = str(entry.get("command") or "").strip()
+        if "hud_inject" in command:
+            out.add(command)
+    return out
+
+
 def _hook_state(profile: str) -> tuple[bool, bool]:
-    """(config 里声明了 hud_inject, allowlist 里同意过)"""
-    try:
-        declared = "hud_inject" in _profile_cfg(profile).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        declared = False
-    try:
-        allowed = "hud_inject" in _profile_allow(profile).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        allowed = False
-    return declared, allowed
+    """(config 里声明了 hud_inject, allowlist 里对该命令有同意)"""
+    cmds = _hook_commands(profile)
+    allowed = _allowed_commands(profile)
+    return bool(cmds), any(c in allowed for c in cmds)
 
 
-def _all_sessions(db: Path) -> list[tuple[str, str, float]]:
+def _all_sessions(db: Path) -> list[tuple[str, str, float, str]]:
+    """(id, 标题, 最后活动, source)；排除 archived/hidden，但包含 cron（它们同样被注入）。"""
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        try:
-            rows = con.execute(
-                "select id, title, last_activity_at from sessions "
-                "where coalesce(archived,0)=0 and coalesce(hidden,0)=0 and id not like 'cron_%' "
-                "order by last_activity_at desc").fetchall()
-        except sqlite3.Error:
-            rows = con.execute("select id, title, last_activity_at from sessions").fetchall()
+        cols = {row[1] for row in con.execute("pragma table_info(sessions)")}
+        source = "source" if "source" in cols else "''"
+        where = []
+        if "archived" in cols:
+            where.append("coalesce(archived,0)=0")
+        if "hidden" in cols:
+            where.append("coalesce(hidden,0)=0")
+        sql = f"select id, title, last_activity_at, {source} from sessions"
+        if where:
+            sql += " where " + " and ".join(where)
+        rows = con.execute(sql).fetchall()
     finally:
         con.close()
-    return [(sid, title or "", ts or 0) for sid, title, ts in rows]
+    return [(sid, title or "", ts or 0, str(src or "")) for sid, title, ts, src in rows]
 
 
-def _panel_state(meta: dict) -> tuple[bool, bool, str]:
+def _session_kind(sid: str, source: str) -> str:
+    if source == "cron" or sid.startswith("cron_"):
+        return "cron"
+    if source == "kanban":
+        return "kanban"
+    if source == "oneshot":
+        return "oneshot"
+    if source == "subagent":
+        return "subagent"
+    return "chat"
+
+
+def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
+    """(启用, 已过期, 范围, 到期时间是否非法)。到期非法按“全部不生效”算，与注入一致。"""
     enabled = meta.get("enabled", "true").lower() not in {"false", "0", "no", "off"}
     expires = parse_expiry(meta.get("expires_at", ""))
+    invalid_expiry = expires is None
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
-    expired = bool(expires and expires <= datetime.now(CST))
+    expired = invalid_expiry or bool(expires and expires <= datetime.now(CST))
     scope = (meta.get("session_id") or "any").strip()
-    return enabled, expired, scope
+    return enabled, expired, scope, invalid_expiry
 
 
 def _coverage(body: str, meta: dict):
     """对一份正文算覆盖：每个档的统计 + 每条会话的生效与否。"""
-    enabled, expired, panel_scope = _panel_state(meta)
+    enabled, expired, panel_scope, invalid_expiry = _panel_state(meta)
     dbs = _state_dbs()
     if not dbs:
         raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
@@ -273,10 +323,12 @@ def _coverage(body: str, meta: dict):
                              "error": str(exc)})
             continue
         eff = skip = 0
-        for sid, title, ts in sess:
+        for sid, title, ts, source in sess:
             reason = ""
             if not enabled:
                 reason = "面板已暂停"
+            elif invalid_expiry:
+                reason = "到期时间无法解析（注入会整块跳过）"
             elif expired:
                 reason = "面板已过期"
             elif not declared:
@@ -291,6 +343,7 @@ def _coverage(body: str, meta: dict):
                 if kept == 0:
                     reason = "所有条目都不作用于这条会话"
             sessions.append({"id": sid, "profile": profile, "title": (title or "")[:40],
+                             "kind": _session_kind(sid, source),
                              "effective": not reason, "reason": reason,
                              "kept": kept, "total": total})
             if reason:
@@ -304,21 +357,28 @@ def _coverage(body: str, meta: dict):
 
 def cmd_impact(args) -> int:
     """盘点全部对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。"""
-    meta, body = read_panel()
-    enabled, expired, panel_scope = _panel_state(meta)
+    meta, body = read_panel(create=False)
+    enabled, expired, panel_scope, invalid_expiry = _panel_state(meta)
     profiles, sessions = _coverage(body, meta)
+    failed = [p["profile"] for p in profiles if p.get("error")]
     total = sum(p["sessions"] for p in profiles)
     total_eff = sum(p["effective"] for p in profiles)
+    kinds: dict[str, int] = {}
+    for s in sessions:
+        kinds[s.get("kind", "chat")] = kinds.get(s.get("kind", "chat"), 0) + 1
     payload = {
         "panel": {"scope": panel_scope, "enabled": enabled, "expired": expired,
+                  "invalid_expiry": invalid_expiry,
                   "expires_at": meta.get("expires_at", ""),
                   "entries": len(hud_panel.entries(body)) if hud_panel else 0},
         "profiles": profiles, "sessions": sessions,
-        "totals": {"sessions": total, "effective": total_eff, "skipped": total - total_eff},
+        "kinds": kinds,
+        "totals": {"sessions": total, "effective": total_eff, "skipped": total - total_eff,
+                   "complete": not failed, "failed_profiles": failed},
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return 0
+        return 0 if not failed else 1
     print(f"面板：范围={panel_scope} 状态={'暂停' if not enabled else '过期' if expired else '启用'} "
           f"到期={meta.get('expires_at', '?')} 条目={payload['panel']['entries']}")
     print(f"{'档':<14}{'会话':>5}  {'钩子':<4}{'同意':<4}{'生效':>5}{'不生效':>7}")
@@ -328,7 +388,13 @@ def cmd_impact(args) -> int:
             continue
         print(f"{p['profile']:<14}{p['sessions']:>5}  {'✓' if p['declared'] else '✗':<4}"
               f"{'✓' if p['allowed'] else '✗':<4}{p['effective']:>5}{p['skipped']:>7}")
-    print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}")
+    if kinds:
+        print("分类：" + "，".join(f"{k} {v}" for k, v in sorted(kinds.items())))
+    if failed:
+        print(f"\n⚠ 无法完整盘点：{len(failed)} 个档读库失败（{', '.join(failed[:5])}）")
+        print(f"已读到 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}；合计数不可当结论")
+    else:
+        print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}")
     if args.verbose:
         print("\n逐条：")
         for s in sessions:
@@ -337,7 +403,7 @@ def cmd_impact(args) -> int:
                   + ("" if s["effective"] else f"  ← {s['reason']}"))
     if panel_scope in {"", "any", "*"}:
         print("默认范围=any：包含以后新建的会话。要限定范围，给条目加 [scope: session:<id>] 或用 use/ set --session。")
-    return 0
+    return 0 if not failed else 1
 
 
 def _entry_texts(body: str) -> list[str]:
@@ -355,13 +421,17 @@ def _by_profile(rows: list[dict]) -> str:
 
 def cmd_preview(args) -> int:
     """预览一次面板改动的覆盖变化（不写入）。"""
-    meta, body = read_panel()
+    meta, body = read_panel(create=False)
     target = Path(args.body)
     if not target.is_file():
         raise SystemExit(f"正文文件不存在：{target}")
-    new_body = target.read_text(encoding="utf-8").strip()
-    _, old_sessions = _coverage(body, meta)
-    _, new_sessions = _coverage(new_body, meta)
+    new_body = target.read_text(encoding="utf-8").lstrip("\ufeff").strip()
+    # 预览按“确认后会执行 set”的状态算：启用 + 重新续期
+    sim = dict(meta)
+    sim["enabled"] = "true"
+    sim["expires_at"] = (datetime.now(CST) + timedelta(days=MAX_TTL_DAYS)).isoformat(timespec="seconds")
+    _, old_sessions = _coverage(body, sim)
+    _, new_sessions = _coverage(new_body, sim)
     old = {s["id"]: s for s in old_sessions}
     new = {s["id"]: s for s in new_sessions}
     gained = [new[k] for k in new if new[k]["effective"] and not old.get(k, {}).get("effective")]
@@ -406,6 +476,8 @@ def cmd_scope(args) -> int:
     if not 1 <= args.entry <= len(items):
         raise SystemExit(f"条目号超出范围：1..{len(items)}")
     value = args.value.strip()
+    if "\n" in value or "\r" in value:
+        raise SystemExit("作用域值不能包含换行")
     if value.lower() not in {"none", "all"}:
         if hud_panel.parse_scope(value) is None:
             raise SystemExit(f"作用域写法不认：{value}（all / session:id[,id] / profile:p[,p] / none）")
@@ -414,7 +486,7 @@ def cmd_scope(args) -> int:
     first = lines[item["start"]]
     m = hud_panel.ENTRY_RE.match(first)
     marker = m.group(0) if m else ""
-    rest = hud_panel.SCOPE_RE.sub("", first[len(marker):], count=1)
+    rest = re.sub(r"\[scope:[^\]]*\]", "", first[len(marker):], flags=re.IGNORECASE).lstrip()
     tag = "" if value.lower() == "none" else f"[scope: {value}] "
     lines[item["start"]] = marker + tag + rest
     write_panel(meta, "\n".join(lines))
@@ -488,7 +560,7 @@ def cmd_set(args) -> int:
         body_path = Path(args.body)
         if not body_path.is_file():
             raise SystemExit(f"正文文件不存在：{body_path}")
-        body = body_path.read_text(encoding="utf-8").strip()
+        body = body_path.read_text(encoding="utf-8").lstrip("\ufeff").strip()
     elif not sys.stdin.isatty():
         incoming = sys.stdin.read().strip()
         if incoming:
@@ -509,7 +581,11 @@ def cmd_check(_args) -> int:
     if not PANEL.exists():
         print(f"✗ 面板不存在：{PANEL}")
         return 1
-    raw = PANEL.read_text(encoding="utf-8")
+    try:
+        raw = PANEL.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        print(f"✗ 面板不是合法 UTF-8：{PANEL}")
+        return 1
     if raw.startswith("\ufeff"):
         problems.append("文件带 BOM（注入端能容忍，但建议去掉）")
     raw = raw.lstrip("\ufeff")

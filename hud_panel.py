@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import re
 
-ENTRY_RE = re.compile(r"^\s*(?:\d+[.)、]|[-*])\s+")
-SCOPE_RE = re.compile(r"^\s*\[scope:\s*([^\]]+?)\s*\]\s*", re.IGNORECASE)
+ENTRY_RE = re.compile(r"^(?:\d+[.)、]|[-*])\s+")
+SCOPE_RE = re.compile(r"^\s*\[scope:\s*([^\]]*?)\s*\]\s*", re.IGNORECASE)
+INLINE_SCOPE_RE = re.compile(r"\[scope:[^\]]*\]", re.IGNORECASE)
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 KINDS = ("all", "session", "profile")
 
@@ -35,12 +37,25 @@ def parse_scope(token: str) -> tuple[str, set[str]] | None:
     kind = kind.strip().lower()
     if kind not in ("session", "profile"):
         return None
-    items = {v.strip() for v in values.split(",") if v.strip()}
+    raw_items = values.replace(",", " ").split()
+    if raw_items == ["*"]:
+        return ("all", set())
+    items = {v.strip() for v in raw_items if v.strip()}
     return (kind, items) if items else None
 
 
 def _entry_starts(lines: list[str]) -> list[int]:
-    return [i for i, line in enumerate(lines) if ENTRY_RE.match(line)]
+    """顶格条目行；代码围栏内的不算。"""
+    starts: list[int] = []
+    fence: str | None = None
+    for i, line in enumerate(lines):
+        m = FENCE_RE.match(line)
+        if m:
+            fence = None if fence else m.group(1)
+            continue
+        if fence is None and ENTRY_RE.match(line):
+            starts.append(i)
+    return starts
 
 
 def entries(body: str) -> list[dict]:
@@ -51,7 +66,9 @@ def entries(body: str) -> list[dict]:
     for n, start in enumerate(starts):
         end = starts[n + 1] if n + 1 < len(starts) else len(lines)
         first = lines[start]
-        m = SCOPE_RE.match(ENTRY_RE.sub("", first, count=1))
+        marker = ENTRY_RE.match(first)
+        rest = first[len(marker.group(0)):] if marker else first
+        m = SCOPE_RE.match(rest)
         token = m.group(1) if m else None
         out.append({"start": start, "end": end, "scope_token": token,
                     "scope": parse_scope(token) if token else None})
@@ -60,7 +77,7 @@ def entries(body: str) -> list[dict]:
 
 def scope_matches(scope, session_id: str, profile: str) -> bool:
     if scope is None:
-        return True
+        return False  # 非法/缺失一律不匹配；默认继承由调用方先填好
     kind, items = scope
     if kind == "all":
         return True
@@ -78,10 +95,13 @@ def filter_body(body: str, session_id: str, profile: str,
     items = entries(body)
     if not items:
         return body, 1, 1
-    out: list[str] = []
+    out: list[str] = lines[: items[0]["start"]]  # 保留第一个条目之前的标题/前言
     kept = 0
     for item in items:
-        scope = item["scope"] or default_scope
+        if item["scope_token"] is not None:
+            scope = item["scope"]  # 非法 → None → 不匹配（fail-closed）
+        else:
+            scope = default_scope if default_scope is not None else ("all", set())
         if not scope_matches(scope, session_id, profile):
             continue
         block = lines[item["start"]:item["end"]]
@@ -106,11 +126,24 @@ def entry_scopes(body: str) -> list[tuple[str, str | None]]:
     return result
 
 
+def invalid_scopes(body: str) -> list[str]:
+    """返回非法标注列表（条目开头写了但解析不了）。"""
+    return [item["scope_token"] for item in entries(body)
+            if item["scope_token"] is not None and item["scope"] is None]
+
+
 def validate(body: str) -> list[str]:
-    """返回非法作用域标注的告警列表。"""
-    warns = []
+    """返回作用域相关的告警（非法、写在非行首）。"""
+    warns = [f"[scope: {token}] 非法（只认 all / session:id / profile:name）"
+             for token in invalid_scopes(body)]
+    lines = body.splitlines()
     for item in entries(body):
-        token = item["scope_token"]
-        if token and parse_scope(token) is None:
-            warns.append(f"[scope: {token}] 非法（只认 all / session:id / profile:name）")
+        first = lines[item["start"]]
+        # 代码片段里的示例不算“写错位置”（如文档里用 `[scope: session:<id>]` 举例）
+        clean = re.sub(r"`[^`]*`", "", first)
+        inline = INLINE_SCOPE_RE.findall(clean)
+        if item["scope_token"] is not None:
+            inline = inline[1:]  # 行首那个已被当标注，同行再出现才算写错位置
+        if inline:
+            warns.append(f"条目「{first[:20]}…」的标注不在行首，注入时不会生效也不会被删掉")
     return warns

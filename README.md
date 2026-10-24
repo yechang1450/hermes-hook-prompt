@@ -116,6 +116,13 @@ enabled: true                                  # off 即暂停，不用删配置
 - 会话 id 用 `hudctl.py sessions` 查；
 - 改写某条的作用域：`hudctl.py scope <条目号> all|session:id[,id]|profile:p[,p]|none`。
 
+写错时的行为（都是刻意的）：
+
+- **标注非法 = 对谁都不生效**（fail-closed），不会退化成“全员可见”；`check` 会把它报出来，注入日志带 `invalid_scope=N`。
+- 条目必须**顶格**写；缩进行算上一条的续行，不会被当成新条目。
+- 第一个条目之前的标题/前言（如 `## 硬约束`）原样保留；代码围栏里的编号不算条目。
+- 标注只认条目开头那一个；写在行尾的不会被解释、也不会被删，`check` 会告警。
+
 ### 3.2 增、删、改面板的流程（强制）
 
 收到「给面板加一条 / 删一条 / 改一条」时，**先盘点再动手**：
@@ -148,9 +155,9 @@ python hudctl.py off / on                   # 暂停 / 恢复
 python hudctl.py snapshot                   # 存当天快照到 snapshots/
 python hudctl.py restore latest --ttl 8h    # 从快照恢复（设计上只允许人手动跑）
 python hudctl.py prune --keep 14            # 只留最近 14 份快照
-python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/正文超长）
+python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/正文超长/作用域非法）
 python hudctl.py sessions                   # 列出所有档最近的会话（default + profiles/* 的 state.db，只读）
-python hudctl.py impact [--verbose|--json]  # 盘点全部会话：哪些生效、哪些不生效、为什么
+python hudctl.py impact [--verbose|--json]  # 盘点全部会话：哪些生效、哪些不生效、为什么（含分类：对话/cron/kanban/oneshot/子代理）
 python hudctl.py preview --body new.md     # 预览一次改动的覆盖变化（新增/失去生效、条目增删），不写入
 python hudctl.py scope <条目号> all|session:id|profile:p|none   # 改单条作用域
 python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个会话
@@ -198,7 +205,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-45 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+64 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -228,7 +235,7 @@ python -m unittest discover -s tests -v
 | `selfcheck.py` | Hermes 更新后的机制体检（6 项），写 `state/selfcheck.json` |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/` | 单元测试（标准库 unittest）：`test_hud.py` 主流程、`test_selfcheck.py` 机制自检、`test_scope.py` 作用域与 impact |
+| `tests/` | 单元测试（标准库 unittest）：`test_hud.py` 主流程、`test_selfcheck.py` 机制自检、`test_scope.py` 作用域与 impact、`test_scope_regressions.py` 缺陷回归 |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
