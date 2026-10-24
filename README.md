@@ -126,6 +126,7 @@ python hudctl.py impact --verbose  # 再逐条列出每个会话生效与否及�
 python hudctl.py impact --json     # 给程序/Agent 读
 ```
 
+0. 把候选正文写成文件，先 `preview --body` 看变化（新增/失去生效的会话、条目增删）；
 1. 跑 `impact`，把**哪些对话会生效、哪些不会、为什么**（面板暂停/过期、该档没声明钩子、没同意、范围不匹配、条目全被过滤）列给用户；
 2. **问一句 yes/no**；
 3. 用户回语义为 yes → 执行增删改，改完再跑一次 `impact` + `check` 复核；
@@ -150,6 +151,7 @@ python hudctl.py prune --keep 14            # 只留最近 14 份快照
 python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/正文超长）
 python hudctl.py sessions                   # 列出所有档最近的会话（default + profiles/* 的 state.db，只读）
 python hudctl.py impact [--verbose|--json]  # 盘点全部会话：哪些生效、哪些不生效、为什么
+python hudctl.py preview --body new.md     # 预览一次改动的覆盖变化（新增/失去生效、条目增删），不写入
 python hudctl.py scope <条目号> all|session:id|profile:p|none   # 改单条作用域
 python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个会话
 ```
@@ -196,7 +198,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-44 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+45 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v

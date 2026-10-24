@@ -246,19 +246,23 @@ def _all_sessions(db: Path) -> list[tuple[str, str, float]]:
     return [(sid, title or "", ts or 0) for sid, title, ts in rows]
 
 
-def cmd_impact(args) -> int:
-    """盘点全部对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。"""
-    meta, body = read_panel()
+def _panel_state(meta: dict) -> tuple[bool, bool, str]:
     enabled = meta.get("enabled", "true").lower() not in {"false", "0", "no", "off"}
     expires = parse_expiry(meta.get("expires_at", ""))
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     expired = bool(expires and expires <= datetime.now(CST))
-    panel_scope = (meta.get("session_id") or "any").strip()
+    scope = (meta.get("session_id") or "any").strip()
+    return enabled, expired, scope
+
+
+def _coverage(body: str, meta: dict):
+    """对一份正文算覆盖：每个档的统计 + 每条会话的生效与否。"""
+    enabled, expired, panel_scope = _panel_state(meta)
     dbs = _state_dbs()
     if not dbs:
         raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
-    profiles, sessions_out = [], []
+    profiles, sessions = [], []
     for profile, db in dbs:
         declared, allowed = _hook_state(profile)
         try:
@@ -281,29 +285,35 @@ def cmd_impact(args) -> int:
                 reason = "该档没同意该钩子命令"
             elif panel_scope not in {"", "any", "*"} and panel_scope != sid:
                 reason = "面板只指向别的会话"
-            else:
-                kept, total = (1, 1)
-                if hud_panel is not None:
-                    _, kept, total = hud_panel.filter_body(body, sid, profile)
+            kept, total = 1, 1
+            if not reason and hud_panel is not None:
+                _, kept, total = hud_panel.filter_body(body, sid, profile)
                 if kept == 0:
                     reason = "所有条目都不作用于这条会话"
+            sessions.append({"id": sid, "profile": profile, "title": (title or "")[:40],
+                             "effective": not reason, "reason": reason,
+                             "kept": kept, "total": total})
             if reason:
                 skip += 1
-                sessions_out.append({"id": sid, "profile": profile, "title": title[:40],
-                                     "effective": False, "reason": reason})
             else:
                 eff += 1
-                sessions_out.append({"id": sid, "profile": profile, "title": title[:40],
-                                     "effective": True, "reason": ""})
         profiles.append({"profile": profile, "sessions": len(sess), "declared": declared,
                          "allowed": allowed, "effective": eff, "skipped": skip})
+    return profiles, sessions
+
+
+def cmd_impact(args) -> int:
+    """盘点全部对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。"""
+    meta, body = read_panel()
+    enabled, expired, panel_scope = _panel_state(meta)
+    profiles, sessions = _coverage(body, meta)
     total = sum(p["sessions"] for p in profiles)
     total_eff = sum(p["effective"] for p in profiles)
     payload = {
         "panel": {"scope": panel_scope, "enabled": enabled, "expired": expired,
                   "expires_at": meta.get("expires_at", ""),
                   "entries": len(hud_panel.entries(body)) if hud_panel else 0},
-        "profiles": profiles, "sessions": sessions_out,
+        "profiles": profiles, "sessions": sessions,
         "totals": {"sessions": total, "effective": total_eff, "skipped": total - total_eff},
     }
     if args.json:
@@ -321,12 +331,69 @@ def cmd_impact(args) -> int:
     print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}")
     if args.verbose:
         print("\n逐条：")
-        for s in sessions_out:
+        for s in sessions:
             mark = "生效" if s["effective"] else "不生效"
             print(f"  [{mark}] {s['id']:<26} {s['profile']:<12} {s['title']}"
                   + ("" if s["effective"] else f"  ← {s['reason']}"))
     if panel_scope in {"", "any", "*"}:
         print("默认范围=any：包含以后新建的会话。要限定范围，给条目加 [scope: session:<id>] 或用 use/ set --session。")
+    return 0
+
+
+def _entry_texts(body: str) -> list[str]:
+    if hud_panel is None:
+        return []
+    return [text for text, _ in hud_panel.entry_scopes(body)]
+
+
+def _by_profile(rows: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["profile"]] = counts.get(row["profile"], 0) + 1
+    return "，".join(f"{k} {v}" for k, v in sorted(counts.items())) or "无"
+
+
+def cmd_preview(args) -> int:
+    """预览一次面板改动的覆盖变化（不写入）。"""
+    meta, body = read_panel()
+    target = Path(args.body)
+    if not target.is_file():
+        raise SystemExit(f"正文文件不存在：{target}")
+    new_body = target.read_text(encoding="utf-8").strip()
+    _, old_sessions = _coverage(body, meta)
+    _, new_sessions = _coverage(new_body, meta)
+    old = {s["id"]: s for s in old_sessions}
+    new = {s["id"]: s for s in new_sessions}
+    gained = [new[k] for k in new if new[k]["effective"] and not old.get(k, {}).get("effective")]
+    lost = [old[k] for k in old if old[k]["effective"] and not new.get(k, {}).get("effective")]
+    old_entries, new_entries = _entry_texts(body), _entry_texts(new_body)
+    added = [t for t in new_entries if t not in old_entries]
+    removed = [t for t in old_entries if t not in new_entries]
+    payload = {
+        "entries": {"before": len(old_entries), "after": len(new_entries),
+                    "added": added, "removed": removed},
+        "effective": {"before": sum(s["effective"] for s in old_sessions),
+                      "after": sum(s["effective"] for s in new_sessions)},
+        "gained": gained, "lost": lost,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    print(f"条目：{len(old_entries)} → {len(new_entries)}"
+          f"（新增 {len(added)}、删除 {len(removed)}）")
+    print(f"生效会话：{payload['effective']['before']} → {payload['effective']['after']}")
+    print(f"新增生效：{len(gained)} 条（{_by_profile(gained)}）")
+    print(f"失去生效：{len(lost)} 条（{_by_profile(lost)}）")
+    for text in added:
+        print(f"  + {text[:50]}")
+    for text in removed:
+        print(f"  - {text[:50]}")
+    if args.verbose:
+        for s in gained:
+            print(f"  [+生效] {s['id']:<26} {s['profile']:<12} {s['title']}")
+        for s in lost:
+            print(f"  [-生效] {s['id']:<26} {s['profile']:<12} {s['title']}  ← {s['reason']}")
+    print(f"\n确认后执行：python hudctl.py set --body \"{target}\"")
     return 0
 
 
@@ -557,6 +624,11 @@ def main() -> int:
     p_impact.add_argument("--json", action="store_true")
     p_impact.add_argument("--verbose", action="store_true")
     p_impact.set_defaults(func=cmd_impact)
+    p_preview = sub.add_parser("preview")
+    p_preview.add_argument("--body", required=True, help="候选正文文件")
+    p_preview.add_argument("--json", action="store_true")
+    p_preview.add_argument("--verbose", action="store_true")
+    p_preview.set_defaults(func=cmd_preview)
     p_scope = sub.add_parser("scope")
     p_scope.add_argument("entry", type=int)
     p_scope.add_argument("value")

@@ -85,6 +85,28 @@ class ScopeCase(unittest.TestCase):
         text = self.panel.read_text(encoding="utf-8")
         self.assertIn("2. [scope: session:AAA,BBB] 二号", text)
 
+
+    def test_preview_reports_lost_sessions(self):
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(
+            json.dumps({"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        make_db(self.home / "state.db", [("AAA", "a"), ("BBB", "b")])
+        write_panel(self.panel, "1. [scope: all] 全部")
+        candidate = self.home / "new.md"
+        candidate.write_text("1. [scope: session:AAA] 只给 A\n", encoding="utf-8")
+        env = dict(os.environ, HERMES_HOME=str(self.home), HUD_PANEL=str(self.panel),
+                   HUD_STATE=str(self.state), PYTHONIOENCODING="utf-8")
+        r = subprocess.run([PY, str(REPO / "hudctl.py"), "preview", "--body", str(candidate), "--json"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           env=env, timeout=180)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["effective"], {"before": 2, "after": 1})
+        self.assertEqual([s["id"] for s in data["lost"]], ["BBB"])
+        self.assertEqual(data["gained"], [])
+
     def test_impact_counts_and_reasons(self):
         # default 有钩子+同意；ceo 没有钩子 → 该档全部不生效
         (self.home / "config.yaml").write_text(
