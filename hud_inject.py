@@ -38,7 +38,7 @@ MAX_LOG_BYTES = 1_000_000
 HERMES_HOME = os.environ.get("HERMES_HOME") or os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local"), "hermes")
 SOURCE = os.path.join(HERMES_HOME, "hermes-agent")
-STATE_FILE = os.path.join(ROOT, "state", "selfcheck.json")
+STATE_FILE = os.path.join(os.environ.get("HUD_STATE") or os.path.join(ROOT, "state"), "selfcheck.json")
 
 
 def _mech_fingerprint() -> str:

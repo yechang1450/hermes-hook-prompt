@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-STATE = ROOT / "state"
+STATE = Path(os.environ.get("HUD_STATE") or (ROOT / "state"))
 STATE_FILE = STATE / "selfcheck.json"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or (Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "hermes"))
 SOURCE = HERMES_HOME / "hermes-agent"
