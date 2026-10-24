@@ -485,7 +485,7 @@ def cmd_impact(args) -> int:
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return 0 if not failed else 1
+        return 0 if not failed and not failed_all else 1
     print(f"面板：范围={panel_scope} 状态={'暂停' if not enabled else '过期' if expired else '启用'} "
           f"到期={meta.get('expires_at', '?')} 条目={payload['panel']['entries']}")
     if filtered:
@@ -505,6 +505,8 @@ def cmd_impact(args) -> int:
     if kinds:
         print("分类：" + "，".join(f"{k} {v}" for k, v in sorted(kinds.items())))
     note = f"（筛选后；全量 {total_all} 条，生效 {eff_all}）" if filtered else ""
+    if failed_all:
+        note += f"；⚠ 全量不完整：{len(failed_all)} 个档读库失败（{', '.join(failed_all[:5])}）"
     if failed:
         print(f"\n⚠ 无法完整盘点：{len(failed)} 个档读库失败（{', '.join(failed[:5])}）")
         print(f"已读到 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}；"
@@ -519,7 +521,7 @@ def cmd_impact(args) -> int:
                   + ("" if s["effective"] else f"  ← {s['reason']}"))
     if panel_scope in {"", "any", "*"}:
         print("默认范围=any：包含以后新建的会话。要限定范围，给条目加 [scope: session:<id>] 或用 use/ set --session。")
-    return 0 if not failed else 1
+    return 0 if not failed and not failed_all else 1
 
 
 def _entry_texts(body: str) -> list[str]:

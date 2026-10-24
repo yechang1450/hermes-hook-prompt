@@ -72,9 +72,11 @@ def main() -> int:
         if since and ts[:10] < since:
             continue
         total += 1
-        mprof = re.search(r"profile=(\S+)", rest)
+        # meta= 里可能是面板原文（如 meta='profile=ceo'），先剥掉再取字段，防被劫持
+        clean = re.sub(r"meta=(?:'[^']*'|\"[^\"]*\"|\S+)", "", rest)
+        mprof = re.search(r"\bprofile=(\S+)", clean)
         prof = mprof.group(1) if mprof else "-"
-        bad = re.search(r"invalid_scope=(\d+)", rest)
+        bad = re.search(r"\binvalid_scope=(\d+)", clean)
         if bad:
             invalid_scope_hits += int(bad.group(1))
         if kind == "inject":
@@ -82,27 +84,32 @@ def main() -> int:
             first.setdefault(prof, ts)
             last[prof] = ts
             recent.append(raw.strip())
-            me = re.search(r"entries=(\d+)/(\d+)", rest)
+            me = re.search(r"\bentries=(\d+)/(\d+)", clean)
             if me and int(me.group(1)) < int(me.group(2)):
                 filtered_rounds += 1
                 filtered_by_prof[prof] += 1
         else:
-            reason = rest.split()[0] if rest else "?"
+            reason = clean.split()[0] if clean else "?"
             skip[prof][reason] += 1
+            if reason == "no-entry-for-session":
+                # 整块面板都被作用域筛掉：也算一轮“被过滤”
+                filtered_rounds += 1
+                filtered_by_prof[prof] += 1
 
     print(f"日志：{LOG}")
     print(f"统计区间：{since or '全部'}　总行数 {total}\n")
     print(f"{'档':<14}{'注入':>6}{'跳过':>6}  首次注入             最后注入")
     for prof in sorted(inj, key=lambda p: -inj[p]):
         print(f"{prof:<14}{inj[prof]:>6}{sum(skip[prof].values()):>6}  {first[prof][:19]:<20} {last[prof][:19]}")
-    if inj:
+    if filtered_rounds or invalid_scope_hits:
         print(f"\n作用域过滤：{filtered_rounds} 轮有条目被筛掉"
               + (f"（按档：{'，'.join(f'{k} {v}' for k, v in sorted(filtered_by_prof.items()))}）"
                  if filtered_by_prof else "")
               + (f"；非法 [scope:] 累计 {invalid_scope_hits} 处" if invalid_scope_hits else ""))
     if skip:
         print("\n跳过原因：")
-        for prof, c in sorted(skip.items()):
+        for prof in sorted(skip):
+            c = skip[prof]
             if not c:
                 continue
             print(f"  {prof:<14}" + "  ".join(f"{k}×{v}" for k, v in c.items()))

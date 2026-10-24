@@ -234,6 +234,29 @@ class RegCase(unittest.TestCase):
         self.assertEqual(data["totals"]["effective"], 0)
         self.assertIn("没声明", data["sessions"][0]["reason"])
 
+    # ---- impact：筛选后仍要提示“全量不完整” ----
+    def test_impact_filtered_still_flags_failed_profile(self):
+        self.panel_text("1. [scope: all] x")
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('AAA','a',1,0,0,'chat')")
+        con.commit(); con.close()
+        bad = self.home / "profiles" / "broken"
+        bad.mkdir(parents=True)
+        (bad / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+        (bad / "state.db").mkdir()          # 目录冒充库 → 读失败
+        r = self.ctl("impact", "--profile", "default",
+                     env_extra={"HERMES_HOME": str(self.home)})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("全量不完整", r.stdout)
+
+
 
 if __name__ == "__main__":
     unittest.main()

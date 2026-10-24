@@ -469,8 +469,23 @@ class HudCase(unittest.TestCase):
                            capture_output=True, text=True, encoding="utf-8",
                            errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("作用域过滤：1 轮", r.stdout)
+        self.assertIn("作用域过滤：2 轮", r.stdout)  # 1 轮部分筛掉 + 1 轮整块筛空
         self.assertIn("非法 [scope:] 累计 1 处", r.stdout)
+
+    def test_report_ignores_meta_text_when_counting(self):
+        self.write_panel()
+        self.log.write_text(
+            "2026-10-24T10:00:00+08:00 skip bad-expiry meta='profile=ceo' session=BBB profile=default\n"
+            "2026-10-24T10:01:00+08:00 skip bad-expiry meta='invalid_scope=99' session=CCC profile=default\n",
+            encoding="utf-8")
+        env = self.base_env(HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("ceo'", r.stdout)
+        self.assertNotIn("非法 [scope:]", r.stdout)
+        self.assertIn("default", r.stdout)
 
     def test_report_bad_since(self):
         env = self.base_env(HUD_LOG=str(self.log))
