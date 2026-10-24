@@ -26,6 +26,13 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if not _stream.isatty():  # 管道/CI 下统一 UTF-8，避免 Windows 默认代码页报错
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 STATE = Path(os.environ.get("HUD_STATE") or (ROOT / "state"))
 STATE_FILE = STATE / "selfcheck.json"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or (Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "hermes"))

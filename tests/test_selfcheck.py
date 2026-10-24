@@ -37,7 +37,7 @@ class SelfcheckCase(unittest.TestCase):
 
     def run_check(self):
         env = dict(os.environ, HERMES_HOME=str(self.home), HUD_STATE=str(self.state),
-                   HUD_PANEL=str(self.panel), HUD_PROFILE="default")
+                   HUD_PANEL=str(self.panel), HUD_PROFILE="default", PYTHONIOENCODING="utf-8")
         return subprocess.run([sys.executable, str(REPO / "selfcheck.py")],
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               env=env, timeout=180)
