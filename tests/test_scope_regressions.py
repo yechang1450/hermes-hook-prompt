@@ -154,8 +154,20 @@ class RegCase(unittest.TestCase):
         candidate.write_text("\ufeff1. [scope: all] 新一\n2. [scope: all] 新二\n", encoding="utf-8")
         r = self.ctl("scope", "1", "all")  # 先确保面板可写
         self.assertEqual(r.returncode, 0)
+        # preview 需要能读到会话库；建一个最小 home（CI 上没有真实 HERMES_HOME）
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('AAA','a',1,0,0,'chat')")
+        con.commit(); con.close()
         # preview 只读，不应把 BOM 当正文
-        p = self.ctl("preview", "--body", str(candidate), "--json")
+        p = self.ctl("preview", "--body", str(candidate), "--json",
+                     env_extra={"HERMES_HOME": str(self.home)})
         data = json.loads(p.stdout)
         self.assertEqual(data["entries"]["after"], 2)
 
