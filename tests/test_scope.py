@@ -135,5 +135,113 @@ class ScopeCase(unittest.TestCase):
         self.assertIn("没声明", reasons["CCC"])
 
 
+class ImpactFilterCase(unittest.TestCase):
+    """impact 的 --profile / --kinds 筛选：表格与 JSON 同口径，totals 筛后 + totals_all 全量。"""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.home = Path(self.td.name)
+        self.panel = self.home / "panel.md"
+        self.state = self.home / "state"
+        write_panel(self.panel, "1. [scope: all] 全部")
+        self.hook_ready(self.home, [("AAA", "a", "chat"), ("BBB", "b", "chat"),
+                                    ("cron_1", "c", "cron"), ("kan_1", "k", "kanban")])
+        ceo = self.home / "profiles" / "ceo"
+        ceo.mkdir(parents=True)
+        self.hook_ready(ceo, [("CCC", "d", "chat"), ("sub_1", "e", "subagent")])
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def hook_ready(self, base: Path, sessions):
+        """让 base 档声明钩子并同意，然后建库（带 source 列，便于造分类）。"""
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (base / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(base / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.executemany("insert into sessions values (?,?,1,0,0,?)",
+                        [(sid, title, source) for sid, title, source in sessions])
+        con.commit()
+        con.close()
+
+    def impact(self, *args):
+        env = dict(os.environ, HERMES_HOME=str(self.home), HUD_PANEL=str(self.panel),
+                   HUD_STATE=str(self.state), PYTHONIOENCODING="utf-8")
+        return subprocess.run([PY, str(REPO / "hudctl.py"), "impact", *args],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=env, timeout=180)
+
+    def test_profile_filter(self):
+        r = self.impact("--json", "--profile", "ceo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["panel"]["filters"], {"profiles": ["ceo"], "kinds": []})
+        self.assertEqual([p["profile"] for p in data["profiles"]], ["ceo"])
+        self.assertEqual(sorted(s["id"] for s in data["sessions"]), ["CCC", "sub_1"])
+        self.assertEqual(data["totals"]["sessions"], 2)
+        self.assertEqual(data["totals"]["effective"], 2)
+        # 全量仍在，便于对照
+        self.assertEqual(data["totals_all"]["sessions"], 6)
+        self.assertEqual(data["totals_all"]["effective"], 6)
+
+    def test_kind_filter_and_profile_recount(self):
+        r = self.impact("--json", "--kinds", "chat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["panel"]["filters"], {"profiles": [], "kinds": ["chat"]})
+        self.assertEqual(sorted(s["id"] for s in data["sessions"]), ["AAA", "BBB", "CCC"])
+        self.assertEqual(data["totals"]["sessions"], 3)
+        self.assertEqual(data["totals_all"]["sessions"], 6)
+        rows = {p["profile"]: p for p in data["profiles"]}
+        self.assertEqual((rows["default"]["sessions"], rows["ceo"]["sessions"]), (2, 1))
+        self.assertEqual(data["kinds"], {"chat": 3})
+
+        r2 = self.impact("--json", "--kinds", "cron,subagent")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        got = json.loads(r2.stdout)
+        self.assertEqual(sorted(s["id"] for s in got["sessions"]), ["cron_1", "sub_1"])
+        self.assertEqual(got["totals"]["sessions"], 2)
+
+    def test_table_respects_filters(self):
+        r = self.impact("--profile", "default", "--kinds", "cron", "--verbose")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("筛选：档=default 分类=cron", r.stdout)
+        self.assertIn("合计 1 条会话", r.stdout)
+        self.assertIn("全量 6 条", r.stdout)
+        self.assertIn("cron_1", r.stdout)
+        self.assertNotIn("AAA", r.stdout)  # 被 kind 筛掉
+        self.assertNotIn("CCC", r.stdout)  # 被档筛掉
+
+    def test_profile_without_db_is_noted(self):
+        (self.home / "profiles" / "ghost").mkdir()  # 目录在、没有 state.db
+        r = self.impact("--profile", "ghost")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("没有会话库", r.stdout)
+        self.assertIn("合计 0 条会话", r.stdout)
+
+    def test_invalid_filter_values(self):
+        bad_profile = self.impact("--json", "--profile", "nope")
+        self.assertEqual(bad_profile.returncode, 1)
+        self.assertIn("不认识的档名", bad_profile.stderr)
+        self.assertIn("ceo", bad_profile.stderr)  # 现有的档列给用户看
+
+        bad_kind = self.impact("--kinds", "nope")
+        self.assertEqual(bad_kind.returncode, 1)
+        self.assertIn("不认识的分类", bad_kind.stderr)
+
+        empty = self.impact("--profile", "")
+        self.assertEqual(empty.returncode, 1)
+        self.assertIn("--profile 不能为空", empty.stderr)
+
+        wrong_case = self.impact("--profile", "CEO")
+        self.assertEqual(wrong_case.returncode, 1)
+        self.assertIn("大小写敏感", wrong_case.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

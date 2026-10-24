@@ -133,7 +133,10 @@ enabled: true                                  # off 即暂停，不用删配置
 python hudctl.py impact            # 表格：每个档有多少会话、钩子/同意、生效/不生效
 python hudctl.py impact --verbose  # 再逐条列出每个会话生效与否及原因
 python hudctl.py impact --json     # 给程序/Agent 读
+python hudctl.py impact --profile default,ceo --kinds chat,cron  # 只看指定档/分类（可单用，也可组合）
 ```
+
+`--profile` / `--kinds` 只收窄统计范围：表格与 JSON 同口径，JSON 的 `panel.filters` 记下筛了什么，`totals` 只算筛后结果、`totals_all` 仍是全量；档名或分类写错直接报错退出（不会静默当空）。
 
 0. 把候选正文写成文件，先 `preview --body` 看变化（新增/失去生效的会话、条目增删）；
 1. 跑 `impact`，把**哪些对话会生效、哪些不会、为什么**（面板暂停/过期、该档没声明钩子、没同意、范围不匹配、条目全被过滤）列给用户；
@@ -159,7 +162,7 @@ python hudctl.py restore latest --ttl 8h    # 从快照恢复（设计上只允�
 python hudctl.py prune --keep 14            # 只留最近 14 份快照
 python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/整块超长/作用域非法）
 python hudctl.py sessions                   # 列出所有档最近的会话（default + profiles/* 的 state.db，只读）
-python hudctl.py impact [--verbose|--json]  # 盘点全部会话：哪些生效、哪些不生效、为什么（含分类：对话/cron/kanban/oneshot/子代理）
+python hudctl.py impact [--verbose|--json] [--profile p,p] [--kinds chat,cron]  # 盘点会话：哪些生效、哪些不生效、为什么（分类：对话/cron/kanban/oneshot/子代理）；可按档/分类筛选
 python hudctl.py preview --body new.md     # 预览一次改动的覆盖变化（新增/失去生效、条目增删），不写入
 python hudctl.py scope <条目号> all|session:id|profile:p|none   # 改单条作用域
 python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个会话

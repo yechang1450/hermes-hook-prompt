@@ -319,6 +319,73 @@ def _session_kind(sid: str, source: str) -> str:
     return "chat"
 
 
+KIND_CHOICES = ("chat", "cron", "kanban", "oneshot", "subagent")
+
+
+def _known_profiles() -> list[str]:
+    """default + profiles/ 下的档目录；用来校验 --profile 的取值（与 Hermes 的档名一致）。"""
+    names = ["default"]
+    profiles = _hermes_home() / "profiles"
+    if profiles.is_dir():
+        for entry in sorted(profiles.iterdir()):
+            if entry.is_dir() and not entry.name.startswith("."):
+                names.append(entry.name)
+    return names
+
+
+def _split_csv(raw: str) -> list[str]:
+    return [part.strip() for part in (raw or "").split(",") if part.strip()]
+
+
+def parse_profile_filter(raw: str | None) -> list[str]:
+    """`--profile a,b` → 档名列表（去重保序）；不认识的档名报错，大小写按原样匹配。"""
+    if raw is None:
+        return []
+    wanted = _split_csv(raw)
+    if not wanted:
+        raise SystemExit("--profile 不能为空（例：--profile default,ceo）")
+    known = _known_profiles()
+    bad = [name for name in wanted if name not in known]
+    if bad:
+        raise SystemExit(f"不认识的档名：{', '.join(bad)}"
+                         f"（现有：{', '.join(known) or 'default'}；档名大小写敏感）")
+    return list(dict.fromkeys(wanted))
+
+
+def parse_kind_filter(raw: str | None) -> list[str]:
+    """`--kinds chat,cron` → 分类列表（小写归一、去重保序）；非法分类报错。"""
+    if raw is None:
+        return []
+    wanted = _split_csv(raw)
+    if not wanted:
+        raise SystemExit(f"--kinds 不能为空（可选：{','.join(KIND_CHOICES)}）")
+    bad = [name for name in wanted if name.lower() not in KIND_CHOICES]
+    if bad:
+        raise SystemExit(f"不认识的分类：{', '.join(bad)}（可选：{','.join(KIND_CHOICES)}）")
+    return list(dict.fromkeys(name.lower() for name in wanted))
+
+
+def _filter_coverage(profiles: list[dict], sessions: list[dict],
+                     want_profiles: list[str], want_kinds: list[str]):
+    """按档/分类收窄盘点结果；每档计数按剩下的会话重算，避免与 totals 打架。"""
+    if want_profiles:
+        keep = set(want_profiles)
+        profiles = [p for p in profiles if p["profile"] in keep]
+        sessions = [s for s in sessions if s["profile"] in keep]
+    if want_kinds:
+        keep_kinds = set(want_kinds)
+        sessions = [s for s in sessions if s.get("kind", "chat") in keep_kinds]
+    counts: dict[str, list[int]] = {}
+    for s in sessions:
+        slot = counts.setdefault(s["profile"], [0, 0])
+        slot[0] += 1
+        slot[1] += 1 if s["effective"] else 0
+    for p in profiles:
+        total, eff = counts.get(p["profile"], (0, 0))
+        p["sessions"], p["effective"], p["skipped"] = total, eff, total - eff
+    return profiles, sessions
+
+
 def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
     """(启用, 已过期, 范围, 到期时间是否非法)。到期非法按“全部不生效”算，与注入一致。"""
     enabled = meta.get("enabled", "true").lower() not in {"false", "0", "no", "off"}
@@ -381,10 +448,21 @@ def _coverage(body: str, meta: dict):
 
 
 def cmd_impact(args) -> int:
-    """盘点全部对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。"""
+    """盘点对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。
+
+    --profile / --kinds 只看子集（表格与 JSON 同口径）：totals 只算筛后结果，
+    totals_all 保留全量，方便对照“筛掉多少”。
+    """
+    want_profiles = parse_profile_filter(getattr(args, "profile_filter", None))
+    want_kinds = parse_kind_filter(getattr(args, "kind_filter", None))
+    filtered = bool(want_profiles or want_kinds)
     meta, body = read_panel(create=False)
     enabled, expired, panel_scope, invalid_expiry = _panel_state(meta)
-    profiles, sessions = _coverage(body, meta)
+    profiles_all, sessions_all = _coverage(body, meta)
+    failed_all = [p["profile"] for p in profiles_all if p.get("error")]
+    total_all = sum(p["sessions"] for p in profiles_all)
+    eff_all = sum(p["effective"] for p in profiles_all)
+    profiles, sessions = _filter_coverage(profiles_all, sessions_all, want_profiles, want_kinds)
     failed = [p["profile"] for p in profiles if p.get("error")]
     total = sum(p["sessions"] for p in profiles)
     total_eff = sum(p["effective"] for p in profiles)
@@ -395,17 +473,23 @@ def cmd_impact(args) -> int:
         "panel": {"scope": panel_scope, "enabled": enabled, "expired": expired,
                   "invalid_expiry": invalid_expiry,
                   "expires_at": meta.get("expires_at", ""),
-                  "entries": len(hud_panel.entries(body)) if hud_panel else 0},
+                  "entries": len(hud_panel.entries(body)) if hud_panel else 0,
+                  "filters": {"profiles": want_profiles, "kinds": want_kinds}},
         "profiles": profiles, "sessions": sessions,
         "kinds": kinds,
         "totals": {"sessions": total, "effective": total_eff, "skipped": total - total_eff,
                    "complete": not failed, "failed_profiles": failed},
+        "totals_all": {"sessions": total_all, "effective": eff_all,
+                       "skipped": total_all - eff_all,
+                       "complete": not failed_all, "failed_profiles": failed_all},
     }
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0 if not failed else 1
     print(f"面板：范围={panel_scope} 状态={'暂停' if not enabled else '过期' if expired else '启用'} "
           f"到期={meta.get('expires_at', '?')} 条目={payload['panel']['entries']}")
+    if filtered:
+        print(f"筛选：档={'/'.join(want_profiles) or '全部'} 分类={'/'.join(want_kinds) or '全部'}")
     print(f"{'档':<14}{'会话':>5}  {'钩子':<4}{'同意':<4}{'生效':>5}{'不生效':>7}")
     for p in profiles:
         if p.get("error"):
@@ -413,13 +497,20 @@ def cmd_impact(args) -> int:
             continue
         print(f"{p['profile']:<14}{p['sessions']:>5}  {'✓' if p['declared'] else '✗':<4}"
               f"{'✓' if p['allowed'] else '✗':<4}{p['effective']:>5}{p['skipped']:>7}")
+    if want_profiles:
+        present = {p["profile"] for p in profiles}
+        missing = [name for name in want_profiles if name not in present]
+        if missing:
+            print(f"（这些档没有会话库，未计入：{', '.join(missing)}）")
     if kinds:
         print("分类：" + "，".join(f"{k} {v}" for k, v in sorted(kinds.items())))
+    note = f"（筛选后；全量 {total_all} 条，生效 {eff_all}）" if filtered else ""
     if failed:
         print(f"\n⚠ 无法完整盘点：{len(failed)} 个档读库失败（{', '.join(failed[:5])}）")
-        print(f"已读到 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}；合计数不可当结论")
+        print(f"已读到 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}；"
+              f"合计数不可当结论{note}")
     else:
-        print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}")
+        print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}{note}")
     if args.verbose:
         print("\n逐条：")
         for s in sessions:
@@ -829,6 +920,10 @@ def main() -> int:
     p_impact = sub.add_parser("impact")
     p_impact.add_argument("--json", action="store_true")
     p_impact.add_argument("--verbose", action="store_true")
+    p_impact.add_argument("--profile", dest="profile_filter", metavar="名[,名]",
+                          help="只看这些档（逗号分隔；默认全部）")
+    p_impact.add_argument("--kinds", dest="kind_filter", metavar="k1,k2",
+                          help="只看这些分类：" + ",".join(KIND_CHOICES))
     p_impact.set_defaults(func=cmd_impact)
     p_preview = sub.add_parser("preview")
     p_preview.add_argument("--body", required=True, help="候选正文文件")
