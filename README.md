@@ -96,7 +96,7 @@ enabled: true                                  # off 即暂停，不用删配置
 （空行之后是正文，原样注入）
 ```
 
-正文建议控制在 **1000 字以内**（脚本硬上限 1600 字，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，视环境而定，本机常在 0.3–0.6s（慢盘/杀软下更久）。
+正文建议控制在 **1000 字以内**（注入块硬上限 1600 字：标题行 + 正文 + 注入尾行，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，视环境而定，本机常在 0.3–0.6s（慢盘/杀软下更久）。
 
 ### 3.1 作用范围：默认全部（含以后新建的会话）
 
@@ -114,6 +114,7 @@ enabled: true                                  # off 即暂停，不用删配置
 
 - 不带标注 = 跟随面板默认（`any` 时=全部）；
 - 会话 id 用 `hudctl.py sessions` 查；
+- 会话 id / profile 名**大小写敏感**：按原样匹配（`Default` 与 `default` 不是同一个档）；
 - 改写某条的作用域：`hudctl.py scope <条目号> all|session:id[,id]|profile:p[,p]|none`。
 
 写错时的行为（都是刻意的）：
@@ -156,7 +157,7 @@ python hudctl.py off / on                   # 暂停 / 恢复
 python hudctl.py snapshot                   # 存当天快照到 snapshots/
 python hudctl.py restore latest --ttl 8h    # 从快照恢复（设计上只允许人手动跑）
 python hudctl.py prune --keep 14            # 只留最近 14 份快照
-python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/正文超长/作用域非法）
+python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/整块超长/作用域非法）
 python hudctl.py sessions                   # 列出所有档最近的会话（default + profiles/* 的 state.db，只读）
 python hudctl.py impact [--verbose|--json]  # 盘点全部会话：哪些生效、哪些不生效、为什么（含分类：对话/cron/kanban/oneshot/子代理）
 python hudctl.py preview --body new.md     # 预览一次改动的覆盖变化（新增/失去生效、条目增删），不写入
@@ -206,13 +207,13 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-64 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+68 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符）/ UTC 到期按本地显示 / 报告统计与参数校验。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
+覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符/整块估长含尾行与余量）/ UTC 到期按本地显示 / `preview` 条目 diff 按完整正文（重复按次数计）/ 报告统计与参数校验。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
 
 ## 八、边界与安全（先说清楚）
 

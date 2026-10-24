@@ -185,6 +185,55 @@ class RegCase(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("UTF-8", r.stdout)
 
+    # ---- 低：preview 条目 diff 必须比完整正文（不截断、重复按次数计） ----
+    def hook_ready(self):
+        """最小可用 home：本档声明了钩子且已同意，有一条会话。"""
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('AAA','a',1,0,0,'chat')")
+        con.commit(); con.close()
+
+    def test_preview_entry_diff_uses_full_text(self):
+        self.hook_ready()
+        prefix = "很长" * 40  # 80 字，超过旧的 60 字截断
+        self.panel_text(f"1. [scope: all] {prefix}旧尾\n"
+                        f"2. [scope: all] 重复\n3. [scope: all] 重复")
+        candidate = self.home / "new.md"
+        candidate.write_text(f"1. [scope: all] {prefix}新尾\n2. [scope: all] 重复\n",
+                             encoding="utf-8")
+        r = self.ctl("preview", "--body", str(candidate), "--json",
+                     env_extra={"HERMES_HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual((data["entries"]["before"], data["entries"]["after"]), (3, 2))
+        self.assertEqual(data["entries"]["added"], [prefix + "新尾"])
+        self.assertEqual(data["entries"]["removed"], [prefix + "旧尾", "重复"])
+
+    # ---- 事件错配：只声明在 pre_tool_call 下不算数 ----
+    def test_hook_declared_under_wrong_event(self):
+        self.panel_text("1. [scope: all] x")
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_tool_call:\n    - command: python hud_inject.py\n"
+            "  post_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('AAA','a',1,0,0,'chat')")
+        con.commit(); con.close()
+        r = self.ctl("impact", "--json", env_extra={"HERMES_HOME": str(self.home)})
+        data = json.loads(r.stdout)
+        self.assertEqual(data["totals"]["effective"], 0)
+        self.assertIn("没声明", data["sessions"][0]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

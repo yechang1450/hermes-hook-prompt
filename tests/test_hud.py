@@ -217,6 +217,24 @@ class HudCase(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("1600", r.stdout)
 
+    def test_check_counts_header_tail_and_margin(self):
+        # 1500 字正文：旧口径（硬编码头行 38 字 + 正文 = 1538）算通过；
+        # 但整块还要加真实头行、注入尾行（约 65 字）和 selfcheck 提醒余量 → 必须报超长。
+        self.panel.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
+                              "title: 全员自主推进\nenabled: true\n\n" + "字" * 1500 + "\n",
+                              encoding="utf-8")
+        r = self.run_ctl("check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("1600", r.stdout)
+        self.assertIn("尾行", r.stdout)
+
+    def test_check_ok_body_at_recommended_size(self):
+        self.panel.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
+                              "title: 全员自主推进\nenabled: true\n\n" + "字" * 1000 + "\n",
+                              encoding="utf-8")
+        r = self.run_ctl("check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("整块约", r.stdout)
 
     def test_sessions_across_profiles(self):
         home = self.dir / "home"

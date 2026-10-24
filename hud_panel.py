@@ -115,15 +115,31 @@ def filter_body(body: str, session_id: str, profile: str,
     return "\n".join(out).strip(), kept, len(items)
 
 
-def entry_scopes(body: str) -> list[tuple[str, str | None]]:
-    """给 ctl 用：[(条目标题, scope_token 或 None)]。"""
+def entry_texts(body: str) -> list[str]:
+    """给 ctl 用：每条条目的**完整正文**（去掉列表标记与 [scope: …] 标注，含续行）。
+
+    preview 的条目增删比较必须用它，而不是截断后的标题：长条目前缀相同、
+    条目重复，都会让「截断后做集合比较」得出错误的增删结论。
+    """
     lines = body.splitlines()
-    result = []
+    result: list[str] = []
     for item in entries(body):
-        text = lines[item["start"]]
-        text = SCOPE_RE.sub("", ENTRY_RE.sub("", text, count=1)).strip()
-        result.append((text[:60], item["scope_token"]))
+        block = lines[item["start"]:item["end"]]
+        first = block[0]
+        marker = ENTRY_RE.match(first)
+        rest = first[len(marker.group(0)):] if marker else first
+        rest = SCOPE_RE.sub("", rest, count=1).strip()
+        result.append("\n".join([rest] + [line.rstrip() for line in block[1:]]).strip())
     return result
+
+
+def entry_scopes(body: str) -> list[tuple[str, str | None]]:
+    """给 ctl 显示用：[(条目首行（截到 60 字）, scope_token 或 None)]。
+
+    比较增删请用 entry_texts()；这里截断只为显示。
+    """
+    return [((text.splitlines()[0] if text else "")[:60], item["scope_token"])
+            for text, item in zip(entry_texts(body), entries(body))]
 
 
 def invalid_scopes(body: str) -> list[str]:

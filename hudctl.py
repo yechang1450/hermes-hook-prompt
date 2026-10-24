@@ -23,6 +23,7 @@ import re
 import shutil
 import sqlite3
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -221,15 +222,39 @@ def _profile_allow(profile: str) -> Path:
 
 
 def _hook_commands(profile: str) -> list[str]:
-    """config 里未注释的、command 指向 hud_inject 的钩子命令。"""
+    """config 里 **pre_llm_call 事件下**、未注释的、command 指向 hud_inject 的命令。
+
+    要跟事件走：只声明在 pre_tool_call 下的命令不算数（否则陈旧配置会假装生效）。
+    同时支持块写法与 `pre_llm_call: [{command: …}]` 行内写法。
+    """
     try:
         text = _profile_cfg(profile).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    out = []
-    for line in text.splitlines():
+    out: list[str] = []
+    event: str | None = None
+    in_hooks = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
         stripped = line.strip()
-        if stripped.startswith("#") or "hud_inject" not in stripped:
+        if not stripped or stripped.startswith("#"):
+            continue
+        if re.match(r"^hooks:\s*$", line):
+            in_hooks, event = True, None
+            continue
+        if in_hooks and not line[:1].isspace():
+            in_hooks, event = False, None  # 回到顶层键，hooks 段结束
+        if not in_hooks:
+            continue
+        m_event = re.match(r"^\s{2}([A-Za-z_][\w]*):", line)
+        if m_event:
+            event = m_event.group(1)
+            if event == "pre_llm_call" and "hud_inject" in stripped:
+                # 行内写法：pre_llm_call: [{command: python …}]
+                for cmd in re.findall(r"command\s*:\s*[\"']?([^\"',}\]]+)", stripped):
+                    out.append(cmd.strip())
+            continue
+        if event != "pre_llm_call" or "hud_inject" not in stripped:
             continue
         m = re.search(r"command:\s*[\"']?(.+?)[\"']?\s*$", stripped)
         if m:
@@ -407,9 +432,32 @@ def cmd_impact(args) -> int:
 
 
 def _entry_texts(body: str) -> list[str]:
+    """每条条目的完整正文（已去掉 [scope: …] 标注）；缺 hud_panel 时退化为空。"""
     if hud_panel is None:
         return []
-    return [text for text, _ in hud_panel.entry_scopes(body)]
+    return hud_panel.entry_texts(body)
+
+
+def _diff_entries(old: list[str], new: list[str]) -> tuple[list[str], list[str]]:
+    """按多重集算条目增删：重复条目按次数计，长条目按完整正文比较（不做截断）。"""
+
+    def only_in(before: list[str], after: list[str]) -> list[str]:
+        pool = Counter(before)
+        out = []
+        for text in after:  # 保留原顺序；同文按出现次数扣减
+            if pool[text] > 0:
+                pool[text] -= 1
+            else:
+                out.append(text)
+        return out
+
+    return only_in(old, new), only_in(new, old)
+
+
+def _brief(text: str, width: int = 50) -> str:
+    """预览输出用：只显示首行，过长/多行截断（JSON 里保留全文）。"""
+    head = text.splitlines()[0] if text else ""
+    return head if len(head) <= width and "\n" not in text else head[:width] + "…"
 
 
 def _by_profile(rows: list[dict]) -> str:
@@ -437,8 +485,7 @@ def cmd_preview(args) -> int:
     gained = [new[k] for k in new if new[k]["effective"] and not old.get(k, {}).get("effective")]
     lost = [old[k] for k in old if old[k]["effective"] and not new.get(k, {}).get("effective")]
     old_entries, new_entries = _entry_texts(body), _entry_texts(new_body)
-    added = [t for t in new_entries if t not in old_entries]
-    removed = [t for t in old_entries if t not in new_entries]
+    added, removed = _diff_entries(old_entries, new_entries)
     payload = {
         "entries": {"before": len(old_entries), "after": len(new_entries),
                     "added": added, "removed": removed},
@@ -455,9 +502,9 @@ def cmd_preview(args) -> int:
     print(f"新增生效：{len(gained)} 条（{_by_profile(gained)}）")
     print(f"失去生效：{len(lost)} 条（{_by_profile(lost)}）")
     for text in added:
-        print(f"  + {text[:50]}")
+        print(f"  + {_brief(text)}")
     for text in removed:
-        print(f"  - {text[:50]}")
+        print(f"  - {_brief(text)}")
     if args.verbose:
         for s in gained:
             print(f"  [+生效] {s['id']:<26} {s['profile']:<12} {s['title']}")
@@ -572,7 +619,27 @@ def cmd_set(args) -> int:
     return 0
 
 
-META_KEYS = ("session_id", "expires_at", "title", "enabled")
+# 与 hud_inject.py 的 MAX_CHARS 同值；两个脚本要能各自独立部署，所以不互相 import
+MAX_BLOCK_CHARS = 1600
+BLOCK_MARGIN = 80  # hud_inject 还可能追加一行 selfcheck 提醒（最长约 40 字），估长留够
+HINT_DEFAULT = "default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
+HINT_OTHER = "{who} bot：优先用 OTUI（build/open-tui-orchestrator）"
+
+
+def estimate_block(meta: dict[str, str], body: str, expires) -> int:
+    """按注入端真实拼法估整块字数：头行 + 正文 + 尾行 + 余量。
+
+    头行用真标题、真到期时间；括号里注入的是档名，取档名与面板 scope 中较长的一个，
+    宁可估长也不低估。尾行是 hud_inject 每次都会追加的「执行机制建议」。
+    """
+    title = meta.get("title") or "会话面板"
+    stamp = expires.astimezone(CST).strftime("%m-%d %H:%M") if expires else "12-31 07:00"
+    profile = (os.environ.get("HERMES_PROFILE") or "default").strip() or "default"
+    who = max((profile, "default", (meta.get("session_id") or "any").strip()), key=len)
+    hint = HINT_DEFAULT if profile == "default" else HINT_OTHER.format(who=profile)
+    header = f"[HUD·{title}] 生效至 {stamp}（{who}）"
+    tail = f"执行机制建议：{hint}"
+    return len(header) + len(body) + len(tail) + 2 + BLOCK_MARGIN
 
 
 def cmd_check(_args) -> int:
@@ -624,15 +691,17 @@ def cmd_check(_args) -> int:
         problems.append("正文为空")
     if hud_panel is not None:
         problems.extend(hud_panel.validate(body))
-    header = f"[HUD·{meta.get('title', '会话面板')}] 生效至 12-31 07:00（default）\n"
-    if len(header) + len(body) > 1600:
-        problems.append(f"注入块约 {len(header) + len(body)} 字（标题行+正文），超过 1600 上限（会被截断）")
+    estimate = estimate_block(meta, body, expires)
+    if estimate > MAX_BLOCK_CHARS:
+        problems.append(f"注入块约 {estimate} 字（标题行 + 正文 + 注入尾行，另含 "
+                        f"{BLOCK_MARGIN} 字提醒余量），超过 {MAX_BLOCK_CHARS} 上限（会被截断）")
     if problems:
         print("✗ 面板有问题：")
         for p in problems:
             print("  - " + p)
         return 1
-    print(f"✓ 面板正常：范围={scope or 'any'} 到期={meta['expires_at']} 正文={len(body)} 字")
+    print(f"✓ 面板正常：范围={scope or 'any'} 到期={meta['expires_at']} 正文={len(body)} 字"
+          f"（整块约 {estimate} 字 / 上限 {MAX_BLOCK_CHARS}）")
     return 0
 
 
