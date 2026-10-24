@@ -516,6 +516,20 @@ class HudCase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("跳过原因", r.stdout)
 
+    def test_report_labels_other_kinds(self):
+        self.write_panel()
+        self.log.write_text(
+            "2026-10-24T10:00:00+08:00 inject session=a profile=default chars=100 entries=1/1\n"
+            "2026-10-24T10:01:00+08:00 guard BLOCK rule=restart tool=terminal\n",
+            encoding="utf-8")
+        env = self.base_env(HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("其它类型（guard×1", r.stdout)
+        self.assertNotIn("格式无法识别", r.stdout)
+
     def test_report_bad_since(self):
         env = self.base_env(HUD_LOG=str(self.log))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py"), "--since", "10-22"],

@@ -616,6 +616,16 @@ def _coverage(body: str, meta: dict, unknown=()):
     return profiles, sessions
 
 
+def _impact_filters(profiles: list[str], kinds: list[str]) -> dict:
+    """impact 的筛选回显；missing_profiles 只在非空时出现（保持旧 JSON 形状）。"""
+    out: dict = {"profiles": profiles, "kinds": kinds}
+    have = {n for n, _ in _state_dbs()}
+    missing = [p for p in _known_profiles() if p not in have]
+    if missing:
+        out["missing_profiles"] = missing
+    return out
+
+
 def cmd_impact(args) -> int:
     """盘点对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。
 
@@ -643,7 +653,7 @@ def cmd_impact(args) -> int:
                   "invalid_expiry": invalid_expiry, "unknown_meta": unknown,
                   "expires_at": meta.get("expires_at", ""),
                   "entries": len(hud_panel.entries(body)) if hud_panel else 0,
-                  "filters": {"profiles": want_profiles, "kinds": want_kinds}},
+                  "filters": _impact_filters(want_profiles, want_kinds)},
         "profiles": profiles, "sessions": sessions,
         "kinds": kinds,
         "totals": {"sessions": total, "effective": total_eff, "skipped": total - total_eff,
@@ -682,6 +692,9 @@ def cmd_impact(args) -> int:
               f"合计数不可当结论{note}")
     else:
         print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}{note}")
+    missing = [p for p in _known_profiles() if p not in {n for n, _ in _state_dbs()}]
+    if missing:
+        print(f"\nℹ {len(missing)} 个档还没有 state.db（未使用过，不计入全量）：{', '.join(missing)}")
     if args.verbose:
         print("\n逐条：")
         for s in sessions:

@@ -285,6 +285,30 @@ class RegCase(unittest.TestCase):
         self.assertEqual([p["profile"] for p in data["profiles"]], ["default"])
 
 
+    # ---- impact：有档无库要标出来 ----
+    def test_impact_reports_profiles_without_db(self):
+        self.panel_text("1. [scope: all] x")
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('AAA','a',1,0,0,'chat')")
+        con.commit(); con.close()
+        empty = self.home / "profiles" / "empty"
+        empty.mkdir(parents=True)
+        (empty / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+        r = self.ctl("impact", "--json", env_extra={"HERMES_HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout)
+        data = json.loads(r.stdout)
+        self.assertIn("empty", data["panel"]["filters"]["missing_profiles"])
+        r2 = self.ctl("impact", env_extra={"HERMES_HOME": str(self.home)})
+        self.assertIn("还没有 state.db", r2.stdout)
+
+
 
 if __name__ == "__main__":
     unittest.main()
