@@ -211,20 +211,24 @@ class HudCase(unittest.TestCase):
         self.assertIn("换行", r.stdout + r.stderr)
 
     def test_check_flags_oversized_block(self):
+        # 正文 1590 字（未超 1600 的写入上限）：整块估长只作状态提示，不当格式错；
+        # 要门禁连状态一起卡用 check --strict。
         self.panel.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
                               "title: t\nenabled: true\n\n" + "字" * 1590 + "\n", encoding="utf-8")
         r = self.run_ctl("check")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("1600", r.stdout)
+        self.assertIn("状态提示", r.stdout)
+        self.assertEqual(self.run_ctl("check", "--strict").returncode, 1)
 
     def test_check_counts_header_tail_and_margin(self):
-        # 1500 字正文：旧口径（硬编码头行 38 字 + 正文 = 1538）算通过；
-        # 但整块还要加真实头行、注入尾行（约 65 字）和 selfcheck 提醒余量 → 必须报超长。
+        # 1500 字正文：整块（真实头行 + 正文 + 注入尾行 + 余量）必须被算出来并提示超 1600；
+        # 旧口径只按「硬编码头行 + 正文」算，会漏报。
         self.panel.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
                               "title: 全员自主推进\nenabled: true\n\n" + "字" * 1500 + "\n",
                               encoding="utf-8")
         r = self.run_ctl("check")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("1600", r.stdout)
         self.assertIn("尾行", r.stdout)
 

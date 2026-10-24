@@ -54,8 +54,15 @@ else:  # 兜底：与 hud_panel.hermes_home() 同口径
     HERMES_HOME = Path(os.environ.get("HERMES_HOME")
                        or (Path(_local) / "hermes" if _local
                            else Path.home() / "AppData" / "Local" / "hermes"))
-SOURCE = HERMES_HOME / "hermes-agent"
-PROFILE = os.environ.get("HUD_PROFILE", "default")
+# 源码根向上解析：HERMES_HOME 可能指到 profiles/<名>（那里没有 hermes-agent）
+_SOURCE_ROOT = (hud_panel.source_root(str(HERMES_HOME)) if hud_panel is not None else None)
+SOURCE = Path(_SOURCE_ROOT) if _SOURCE_ROOT else None
+
+PROFILE = (os.environ.get("HUD_PROFILE") or os.environ.get("HERMES_SESSION_PROFILE")
+           or "default")
+PROFILE_DIR = (Path(hud_panel.profile_home(str(HERMES_HOME), PROFILE)) if hud_panel is not None
+               else (HERMES_HOME if PROFILE == "default" else HERMES_HOME / "profiles" / PROFILE))
+
 
 
 def _read(path: Path) -> str:
@@ -70,6 +77,8 @@ SEARCH_GLOBS = ("agent/*.py", "hermes_cli/*.py", "hermes_cli/subcommands/*.py")
 
 def _find_event() -> list[str]:
     """在有限范围里找 pre_llm_call 的落点（事件可能换文件）。"""
+    if SOURCE is None:
+        return []
     hits = []
     for pattern in SEARCH_GLOBS:
         for path in SOURCE.glob(pattern):
@@ -156,6 +165,7 @@ def _panel_check() -> tuple[bool, str, list[str]]:
 
 def check() -> tuple[list[dict], bool, list[str]]:
     results: list[dict] = []
+    notices: list[str] = []
 
     def add(name: str, ok: bool, detail: str = "") -> None:
         results.append({"check": name, "ok": ok, "detail": detail})
@@ -163,28 +173,37 @@ def check() -> tuple[list[dict], bool, list[str]]:
     add("modules:hud_panel", hud_panel is not None,
         "缺 hud_panel.py：注入会整块跳过（fail-closed）")
 
-    hits = _find_event()
-    add("source:pre_llm_call 事件", bool(hits),
-        f"在 {', '.join(SEARCH_GLOBS)} 里没找到 pre_llm_call" if not hits else ", ".join(hits[:4]))
+    if SOURCE is None:
+        # 找不到源码 ≠ 机制坏了：profile 家目录、仅装运行包、源码被挪走都可能这样。
+        # 只作状态提示，不写 error 进共享 state（否则所有档每轮都会告警）。
+        note = (f"未找到 Hermes 源码（{HERMES_HOME} 及其上两级都没有 hermes-agent）："
+                "跳过源码检查，机制是否可用以端到端注入为准")
+        notices.append(note)
+        add("source:pre_llm_call 事件", True, "跳过：未找到源码根")
+        add("source:上下文注入点", True, "跳过：未找到源码根")
+    else:
+        hits = _find_event()
+        add("source:pre_llm_call 事件", bool(hits),
+            f"在 {', '.join(SEARCH_GLOBS)} 里没找到 pre_llm_call" if not hits else ", ".join(hits[:4]))
 
-    turn_src = _read(SOURCE / "agent" / "turn_context.py")
-    add("source:上下文注入点", ("pre_llm_call" in turn_src) and ("plugin_user_context" in turn_src),
-        "agent/turn_context.py 里找不到 pre_llm_call / plugin_user_context")
+        turn_src = _read(SOURCE / "agent" / "turn_context.py")
+        add("source:上下文注入点", ("pre_llm_call" in turn_src) and ("plugin_user_context" in turn_src),
+            "agent/turn_context.py 里找不到 pre_llm_call / plugin_user_context")
 
-    profile_dir = HERMES_HOME if PROFILE == "default" else HERMES_HOME / "profiles" / PROFILE
-    cfg = _read(profile_dir / "config.yaml")
+    cfg = _read(PROFILE_DIR / "config.yaml")
     has_hook = "pre_llm_call" in cfg and "hud_inject.py" in cfg
-    add("config:hooks.pre_llm_call", has_hook, f"{profile_dir / 'config.yaml'} 缺声明的钩子")
+    add("config:hooks.pre_llm_call", has_hook, f"{PROFILE_DIR / 'config.yaml'} 缺声明的钩子")
 
-    allow = _read(profile_dir / "shell-hooks-allowlist.json")
+    allow = _read(PROFILE_DIR / "shell-hooks-allowlist.json")
     approved = "pre_llm_call" in allow and "hud_inject.py" in allow
     add("allowlist:已同意", approved, "该档没有 hud_inject.py 的 pre_llm_call 批准记录")
 
     ok_e2e, detail_e2e = _e2e()
     add("e2e:注入返回 context", ok_e2e, detail_e2e)
 
-    ok_panel, detail_panel, notices = _panel_check()
+    ok_panel, detail_panel, panel_notices = _panel_check()
     add("panel:格式自检", ok_panel, detail_panel)
+    notices.extend(panel_notices)
 
     return results, all(r["ok"] for r in results), notices
 

@@ -16,7 +16,8 @@
 
 fail-closed（宁可整块不注入，也不注入半成品/元数据）：
   · payload 没有 session_id：跳过（空值不等于 any）
-  · 面板头部有未知键、session_id 为空、代码围栏未闭合、缺 hud_panel.py：跳过并 log
+  · 面板头部有未知键、session_id 为空、enabled 取值不在白名单、代码围栏未闭合、
+    正文写了 [scope:] 却没有可识别条目、缺 hud_panel.py：跳过并 log
 
 退出码永远 0：钩子坏了不该拦住正常对话（fail-open）。
 环境变量：HUD_PANEL / HUD_LOG / HUD_STATE 可覆盖默认路径。
@@ -63,7 +64,14 @@ def _mech_fingerprint() -> str:
 
 
 def _selfcheck_note() -> str:
-    """更新后未自检/自检失败时给一行提醒；正常时为空。"""
+    """更新后未自检/自检失败时给提醒；正常时为空。
+
+    失败项分三类，措辞不能混：
+      · panel:*  → 面板格式问题，去跑 `hudctl check`；
+      · source:* → 机制源码变了，才提「适配新版」；
+      · 其它     → 安装/配置问题（config/allowlist 等），按安装步骤补齐。
+    同类合并、不同类分行——面板坏了硬说「适配新版」会把人带偏。
+    """
     try:
         with open(STATE_FILE, encoding="utf-8") as fh:
             state = json.load(fh)
@@ -72,8 +80,25 @@ def _selfcheck_note() -> str:
     if not isinstance(state, dict):
         return "⚠ 机制未自检：先跑 python selfcheck.py"
     if state.get("status") == "error" or not state.get("ok"):
-        return "⚠ 机制自检失败：看 state/selfcheck.json 并适配新版"
-    if state.get("fingerprint") != _mech_fingerprint():
+        failed = [str(item.get("check") or "") for item in (state.get("checks") or [])
+                  if isinstance(item, dict) and not item.get("ok")]
+        panel = [name for name in failed if name.startswith("panel:")]
+        source = [name for name in failed if name.startswith("source:")]
+        other = [name for name in failed if not name.startswith(("panel:", "source:"))]
+        lines: list[str] = []
+        if panel:
+            lines.append("⚠ 面板格式自检失败：先跑 python hudctl.py check")
+        if source:
+            lines.append("⚠ 机制自检失败：看 state/selfcheck.json 并适配新版")
+        if other:
+            lines.append("⚠ 自检失败：看 state/selfcheck.json（config/allowlist 缺失按安装步骤补齐）")
+        if not lines:
+            lines.append("⚠ 机制自检失败：看 state/selfcheck.json")
+        return "\n".join(lines)
+    current = _mech_fingerprint()
+    if not current:
+        return ""      # 找不到源码就没有指纹可言：不拿空值和旧指纹比出「已更新」的假警报
+    if state.get("fingerprint") != current:
         return "⚠ Hermes 已更新、机制未复检：先跑 python selfcheck.py，失败则按提示适配新版"
     return ""
 
@@ -188,7 +213,12 @@ def main() -> int:
         # 头部有不认识的键：不把元数据当正文注入，整块跳过（hudctl check 会报错提示）
         log(f"skip unknown-meta keys={','.join(unknown)} session={session_id} profile={profile}")
         return 0
-    if meta.get("enabled", "true").lower() in {"0", "false", "no", "off"}:
+    enabled = hud_panel.parse_enabled(meta.get("enabled", "true"))
+    if enabled is None:
+        # 非法值不得 fail-open：不认识就当没开，绝不照样注入（check 会报错）
+        log(f"skip bad-enabled value={meta.get('enabled')!r} session={session_id} profile={profile}")
+        return 0
+    if not enabled:
         log(f"skip disabled session={session_id} profile={profile}")
         return 0
     scope = (meta.get("session_id") or "").strip()
@@ -219,6 +249,10 @@ def main() -> int:
     if degenerate:
         # 代码围栏没闭合 → 条目边界不可信，注解可能原样漏进上下文；整块跳过
         log(f"skip degenerate-panel reason={degenerate} session={session_id} profile={profile}")
+        return 0
+    if not hud_panel.entries(body) and hud_panel.INLINE_SCOPE_RE.search(body):
+        # 有 [scope: …] 却解析不出任何条目（比如整块写成缩进段落）：不原样广播带标签的正文
+        log(f"skip degenerate-panel reason=scope-without-entry session={session_id} profile={profile}")
         return 0
     bad_scopes = len(hud_panel.invalid_scopes(body))
     body, kept, total = hud_panel.filter_body(body, session_id, profile)

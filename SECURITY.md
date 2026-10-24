@@ -25,8 +25,8 @@
 - 面板是**符号链接 / Windows 重解析点**时，`hud_inject.py` 拒绝读取（日志记 `skip unsafe-panel`）——防止把 `~/.ssh/id_rsa` 之类的文件当面板送进模型；
 - 面板必须是普通文件，FIFO/设备文件一律拒绝；
 - `hudctl.py` 写面板用「同目录临时文件 + `os.replace`」原子替换，注入端不会读到空/半截内容；面板本身是符号链接时拒绝写入；
-- 读改写走**同一把文件锁**（`panel.md.lock`），并发的 `set/off/on/scope/use/restore` 不会互相覆盖丢更新；读面板有 200 KB 上限，避免误把巨型文件当面板；
-- `restore` 覆盖前会把当前面板存成 `snapshots/pre-restore-<时间戳>.md`；写不进快照就**拒绝恢复**；
+- 读改写走**同一把文件锁**（`panel.md.lock`），并发的 `set/off/on/scope/use/restore` 不会互相覆盖丢更新；整份读取的绝对上限是 2 MB，超过 200 KB 时 `status`/`set` 只读头部（`set` 因此能整份覆盖被写坏的超大面板）、`check` 只报大小，不给自己留死角；
+- `restore` 覆盖前会先把当前面板存成 `snapshots/pre-restore-<时间戳>.md`；写不进快照就**拒绝恢复**；快照内容先按 `hudctl check` 的同一套规则校验，非法快照直接拒绝（exit 2），绝不把现网面板一起写坏；
 - `prune` 默认只列清单，加 `--yes` 才删，且只删本工具命名的快照（手工 `.md` 一律不碰）。
 
 ## 日志

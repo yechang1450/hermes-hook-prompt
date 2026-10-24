@@ -11,6 +11,7 @@
     python hudctl.py off / on                # 暂停 / 恢复注入（不删面板；on --ttl 8h 顺手续期）
     python hudctl.py snapshot                # 存一份快照（同日多份加时间戳，不互相覆盖）
     python hudctl.py restore latest --ttl 8h # 从快照恢复（恢复前自动拍 pre-restore 快照，拍不成拒绝恢复）
+    python hudctl.py restore --file <名>     # 按文件名恢复（含 pre-restore-*.md；写入前先校验快照内容）
     python hudctl.py prune --keep 14         # 只列出将被删除的旧快照；加 --yes 才真删
 
 设计边界：脚本不自动恢复、不自动续期——恢复必须是人手动执行（用户定的规矩）。
@@ -81,8 +82,18 @@ def parse_expiry(raw: str):
 
 META_KEYS = hud_panel.META_KEYS if hud_panel is not None else (
     "session_id", "expires_at", "title", "enabled")
-MAX_PANEL_BYTES = 200_000      # 与 hud_inject 同上限：超过这个大小就不是面板了
+MAX_PANEL_BYTES = 200_000      # 软上限：超过它 status/check 只报，不解析整份（注入端也跳过）
+MAX_PANEL_READ_BYTES = 2_000_000   # 硬上限：整份读写的绝对上限（再大就不能当面板读）
+HEAD_READ_BYTES = 64_000       # 「只读头部」的上限：元数据在前 24 行里，64KB 足够
 MAX_BODY_CHARS = 1600          # 与 hud_inject.MAX_CHARS 同值：正文超限直接拒绝写入
+
+
+def _panel_size() -> int:
+    """面板字节数；读不到就当 0（后续 open/stat 会给出具体错误）。"""
+    try:
+        return PANEL.stat().st_size
+    except OSError:
+        return 0
 
 
 def _strip_comment(value: str) -> str:
@@ -124,8 +135,13 @@ def split_panel(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def read_panel_ex(create: bool = True) -> tuple[dict[str, str], str, list[str]]:
-    """(元数据, 正文, 未知键)。头部未知键必须能报出来：注入端会因此整块跳过。"""
+def read_panel_ex(create: bool = True, head_only: bool = False) -> tuple[dict[str, str], str, list[str]]:
+    """(元数据, 正文, 未知键)。头部未知键必须能报出来：注入端会因此整块跳过。
+
+    head_only=True 只读文件开头（最多 64KB）：元数据在前 24 行，够用了。
+    status/check/set 走这条——面板被写坏成几百 KB 时也能读出头部并整份覆盖，
+    不会因为「读不了整份」而连自救的 set 都执行不了。
+    """
     if not PANEL.exists() and not create:
         raise SystemExit(f"面板不存在：{PANEL}")
     if not PANEL.exists():
@@ -139,13 +155,29 @@ def read_panel_ex(create: bool = True) -> tuple[dict[str, str], str, list[str]]:
         size = PANEL.stat().st_size
     except OSError as exc:
         raise SystemExit(f"读不到面板：{PANEL}（{type(exc).__name__}）")
-    if size > MAX_PANEL_BYTES:
-        raise SystemExit(f"面板过大（{size} 字节 > {MAX_PANEL_BYTES}）：拒绝读取 {PANEL}")
-    try:
-        raw = PANEL.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        raise SystemExit(f"面板不是合法 UTF-8：{PANEL}")
+    if head_only:
+        try:
+            with PANEL.open("rb") as fh:
+                chunk = fh.read(HEAD_READ_BYTES)
+        except OSError as exc:
+            raise SystemExit(f"读不到面板：{PANEL}（{type(exc).__name__}）")
+        raw = chunk.decode("utf-8", errors="replace")
+    else:
+        if size > MAX_PANEL_READ_BYTES:
+            raise SystemExit(
+                f"面板过大（{size} 字节 > {MAX_PANEL_READ_BYTES}）：拒绝整份读取 {PANEL}；"
+                "要换掉它用 set --body <文件>（set 只读头部，可整份覆盖）")
+        try:
+            raw = PANEL.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise SystemExit(f"面板不是合法 UTF-8：{PANEL}")
     return _split_panel_ex(raw.lstrip("\ufeff"))
+
+
+def read_panel_head() -> tuple[dict[str, str], list[str]]:
+    """只读头部：给 status / set 用（超大面板也能读、能覆盖）。"""
+    meta, _body, unknown = read_panel_ex(create=True, head_only=True)
+    return meta, unknown
 
 
 def read_panel(create: bool = True) -> tuple[dict[str, str], str]:
@@ -153,7 +185,8 @@ def read_panel(create: bool = True) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def write_panel(meta: dict[str, str], body: str) -> None:
+def render_panel(meta: dict[str, str], body: str) -> str:
+    """把元数据 + 正文拼成面板文本（write_panel 与 restore 预校验共用同一份拼法）。"""
     meta = dict(meta)
     meta.setdefault("session_id", "any")
     meta.setdefault("title", "会话面板")
@@ -164,9 +197,13 @@ def write_panel(meta: dict[str, str], body: str) -> None:
         if "\n" in meta.get(key, "") or "\r" in meta.get(key, ""):
             raise SystemExit(f"元数据 {key} 不能包含换行")
     head = "\n".join(f"{k}: {meta.get(k, '')}" for k in META_KEYS)
+    return f"{head}\n\n{body}\n"
+
+
+def write_panel(meta: dict[str, str], body: str) -> None:
     if os.path.islink(PANEL):
         raise SystemExit(f"面板是符号链接，拒绝写入：{PANEL}")
-    data = f"{head}\n\n{body}\n"
+    data = render_panel(meta, body)
     tmp = PANEL.with_name(f"{PANEL.name}.{os.getpid()}.tmp")
     try:
         tmp.write_text(data, encoding="utf-8")
@@ -189,7 +226,11 @@ def panel_lock(timeout: float = 10.0):
     lock_path = PANEL.with_name(PANEL.name + ".lock")
     fh = None
     try:
-        fh = open(lock_path, "a+b")
+        try:
+            fh = open(lock_path, "a+b")
+        except OSError as exc:
+            _die(f"打不开面板锁 {lock_path}（{type(exc).__name__}: {exc}）："
+                 "它应该是普通文件；若是目录/别的文件，先把它移走再试")
         try:
             fh.seek(0, os.SEEK_END)
             if fh.tell() == 0:
@@ -475,12 +516,28 @@ def _filter_coverage(profiles: list[dict], sessions: list[dict],
     return profiles, sessions
 
 
+def _enabled_value(meta: dict):
+    """enabled → True / False / None（非法）。与注入端共用 hud_panel.parse_enabled。"""
+    raw = meta.get("enabled", "true")
+    if hud_panel is not None:
+        return hud_panel.parse_enabled(raw)
+    text = str(raw).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
 def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
     """(启用, 已过期, 范围, 到期时间是否非法)。到期非法按“全部不生效”算，与注入一致。
 
     范围为空/缺省**不再**当成 any：注入端把「没写」视为无效并跳过，这边口径必须一致。
+    enabled 用与注入端同一张白名单：非法值 → 不启用（fail-closed），不猜默认开。
     """
-    enabled = meta.get("enabled", "true").lower() not in {"false", "0", "no", "off"}
+    enabled_value = _enabled_value(meta)
+    enabled = bool(enabled_value)
+
     expires = parse_expiry(meta.get("expires_at", ""))
     invalid_expiry = expires is None
     if expires and expires.tzinfo is None:
@@ -490,6 +547,10 @@ def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
     return enabled, expired, scope, invalid_expiry
 
 
+def _enabled_illegal(meta: dict) -> bool:
+    return _enabled_value(meta) is None
+
+
 def _coverage(body: str, meta: dict, unknown=()):
     """对一份正文算覆盖：每个档的统计 + 每条会话的生效与否。
 
@@ -497,6 +558,7 @@ def _coverage(body: str, meta: dict, unknown=()):
     这两条都得在盘点里体现，否则 impact 会报「生效」而实际一个字都注不进去。
     """
     enabled, expired, panel_scope, invalid_expiry = _panel_state(meta)
+    bad_enabled = _enabled_illegal(meta)
     unknown = list(unknown or [])
     degenerate = hud_panel.degenerate_reason(body) if hud_panel is not None else "no-hud-panel"
     dbs = _state_dbs()
@@ -515,7 +577,9 @@ def _coverage(body: str, meta: dict, unknown=()):
         eff = skip = 0
         for sid, title, ts, source in sess:
             reason = ""
-            if not enabled:
+            if bad_enabled:
+                reason = "enabled 取值不合法（注入会整块跳过；hudctl check 会报错）"
+            elif not enabled:
                 reason = "面板已暂停"
             elif unknown:
                 reason = f"头部有未知键（{', '.join(unknown[:3])}），注入会整块跳过"
@@ -537,7 +601,8 @@ def _coverage(body: str, meta: dict, unknown=()):
             if not reason and hud_panel is not None:
                 _, kept, total = hud_panel.filter_body(body, sid, profile)
                 if kept == 0:
-                    reason = "所有条目都不作用于这条会话"
+                    reason = ("正文写了 [scope: …] 却没有可识别条目（注入会整块跳过）"
+                              if total == 0 else "所有条目都不作用于这条会话")
             sessions.append({"id": sid, "profile": profile, "title": (title or "")[:40],
                              "kind": _session_kind(sid, source),
                              "effective": not reason, "reason": reason,
@@ -733,14 +798,14 @@ def cmd_scope(args) -> int:
         item = items[args.entry - 1]
         marker_m = hud_panel.ENTRY_RE.match(lines[item["start"]])
         marker = marker_m.group(0) if marker_m else ""
-        rest = re.sub(r"\[scope:[^\]]*\]", "", lines[item["start"]][len(marker):],
-                      flags=re.IGNORECASE).lstrip()
+        # 只删行首那个标注：正文里恰好写着 `[scope: …]` 字样（示例/说明）不能一起删掉
+        rest = hud_panel.SCOPE_RE.sub("", lines[item["start"]][len(marker):], count=1).lstrip()
         tag = "" if value.lower() == "none" else f"[scope: {value}] "
         block = [marker + tag + rest]
         for idx in range(item["start"] + 1, item["end"]):
             line = lines[idx]
-            if hud_panel.SCOPE_RE.match(line):
-                # 续行上的旧标注一并清掉：留两处标注会让整条失效
+            if idx == item["scope_line"]:
+                # 续行上被认作标注的那一处一并清掉：留两处有效标注会让整条失效
                 line = hud_panel.SCOPE_RE.sub("", line, count=1).rstrip()
                 if not line.strip():
                     continue
@@ -796,18 +861,30 @@ def cmd_use(args) -> int:
 
 
 def cmd_status(_args) -> int:
-    meta, body = read_panel()
+    size = _panel_size()
+    oversized = size > MAX_PANEL_BYTES
+    if oversized:
+        meta, _unknown = read_panel_head()     # 只读头部：几百 KB 也不整份读
+        body = ""
+    else:
+        meta, body = read_panel()
     expires = parse_expiry(meta.get("expires_at", ""))
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     now = datetime.now(CST)
     left = (expires - now) if expires else None
+    flag = _enabled_value(meta)
+    state = ("启用" if flag else "暂停") if flag is not None else f"非法（enabled={meta.get('enabled')!r}，注入会跳过）"
     print(f"面板：{PANEL}")
     print(f"标题：{meta.get('title', '-')}")
     print(f"范围：{meta.get('session_id', 'any')}")
-    print(f"状态：{'启用' if meta.get('enabled', 'true').lower() not in {'false','0','no','off'} else '暂停'}")
+    print(f"状态：{state}")
     print(f"到期：{expires.isoformat(timespec='minutes') if expires else '解析失败'}"
           + (f"（剩 {left.days}天{left.seconds//3600}小时{(left.seconds%3600)//60}分）" if left and left.total_seconds() > 0 else "（已过期）" if left else ""))
+    if oversized:
+        print(f"⚠ 面板过大（{size} 字节 > {MAX_PANEL_BYTES}）：正文不读取；"
+              f"可用 set --body <文件> 整份覆盖（set 只读头部）")
+        return 2
     print(f"正文：{len(body)} 字")
     return 0
 
@@ -833,8 +910,10 @@ def _read_body_file(path: Path) -> str:
 
 
 def cmd_set(args) -> int:
+    warning = ""
     with panel_lock():
-        meta, body = read_panel()
+        # 只读头部：面板被写坏成几百 KB 时也必须能整份覆盖（否则 set 救不回来）
+        meta, _unknown = read_panel_head()
         if args.session:
             if any(ch.isspace() for ch in args.session):
                 _die(f"session_id 不能含空白：{args.session!r}（写 any 或具体会话 id）")
@@ -864,18 +943,24 @@ def cmd_set(args) -> int:
         expires = datetime.now(CST) + parse_ttl(args.ttl)
         estimate = estimate_block(meta, body, expires)
         if estimate > MAX_BLOCK_CHARS:
-            _die(f"注入块约 {estimate} 字（含标题行/尾行/提醒余量），超过 {MAX_BLOCK_CHARS} 上限："
-                 f"正文再减 {estimate - MAX_BLOCK_CHARS} 字")
+            # 只警告不拒写：正文没超 1600 就是合法面板，注入端截断时也会保住绝大部分。
+            # 旧实现拿整块估长拒写，正文 1403 字 + 28 字 session id 都存不进去。
+            warning = (f"⚠ 注入块约 {estimate} 字（含标题行/尾行/余量），超过 {MAX_BLOCK_CHARS}："
+                       f"注入时会被截断，建议再减 {estimate - MAX_BLOCK_CHARS} 字")
         meta["expires_at"] = expires.isoformat(timespec="seconds")
         meta["enabled"] = "true"
         write_panel(meta, body)
     print(f"已更新：范围={meta['session_id']} 到期={meta['expires_at']} 正文={len(body)} 字")
+    if warning:
+        print(warning)
     return 0
 
 
 # 与 hud_inject.py 的 MAX_CHARS 同值；两个脚本要能各自独立部署，所以不互相 import
 MAX_BLOCK_CHARS = 1600
-BLOCK_MARGIN = 80  # hud_inject 还可能追加一行 selfcheck 提醒（最长约 40 字），估长留够
+# hud_inject 还可能追加一行 selfcheck 提醒（约 40 字）。这里只留 20 字余量：
+# 旧值 80 会把「正文 1403 字 + 28 字 session id」这种完全能注进去的保存判成超限。
+BLOCK_MARGIN = 20
 HINT_DEFAULT = "default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
 HINT_OTHER = "{who} bot：优先用 OTUI（build/open-tui-orchestrator）"
 
@@ -883,40 +968,29 @@ HINT_OTHER = "{who} bot：优先用 OTUI（build/open-tui-orchestrator）"
 def estimate_block(meta: dict[str, str], body: str, expires) -> int:
     """按注入端真实拼法估整块字数：头行 + 正文 + 尾行 + 余量。
 
-    头行用真标题、真到期时间；括号里注入的是档名，取档名与面板 scope 中较长的一个，
-    宁可估长也不低估。尾行是 hud_inject 每次都会追加的「执行机制建议」。
+    头行用真标题、真到期时间；括号里注入的是**档名**（payload.profile），所以估长也只取档名。
+    旧实现拿档名与面板 session_id 里较长的一个，40 字的 session id 会把头行凭空放大，
+    害得正文没超限也保存不了。尾行是 hud_inject 每次都会追加的「执行机制建议」。
     """
     title = meta.get("title") or "会话面板"
     stamp = expires.astimezone(CST).strftime("%m-%d %H:%M") if expires else "12-31 07:00"
-    profile = (os.environ.get("HERMES_PROFILE") or "default").strip() or "default"
-    who = max((profile, "default", (meta.get("session_id") or "any").strip()), key=len)
+    profile = (os.environ.get("HERMES_PROFILE") or os.environ.get("HERMES_SESSION_PROFILE")
+               or os.environ.get("HUD_PROFILE") or "default").strip() or "default"
+    who = profile                      # 只取档名：session_id 不进头行
     hint = HINT_DEFAULT if profile == "default" else HINT_OTHER.format(who=profile)
     header = f"[HUD·{title}] 生效至 {stamp}（{who}）"
     tail = f"执行机制建议：{hint}"
     return len(header) + len(body) + len(tail) + 2 + BLOCK_MARGIN
 
 
-def cmd_check(args) -> int:
-    """校验面板格式：**只有真格式错**让 exit code 变 1；过期/暂停/范围不匹配是「状态提示」。
+def _inspect_panel(raw: str) -> dict:
+    """对一份面板文本做完整格式校验（check 与 restore 写入前共用同一套判定）。
 
-    状态提示不算失败：面板过期是正常状态（注入会跳过），把它当机制坏了的判据就是假红。
+    返回 {errors, notices, meta, body, scope, estimate}。只有 **_格式错** 进 errors：
+    过期/暂停/范围不匹配是状态提示（正常状态，不影响机制判定）。
     """
     errors: list[str] = []
     notices: list[str] = []
-    if not PANEL.exists():
-        print(f"✗ 面板不存在：{PANEL}")
-        return 1
-    try:
-        if PANEL.stat().st_size > MAX_PANEL_BYTES:
-            print(f"✗ 面板过大（>{MAX_PANEL_BYTES} 字节）：{PANEL}")
-            return 1
-        raw = PANEL.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        print(f"✗ 面板不是合法 UTF-8：{PANEL}")
-        return 1
-    except OSError as exc:
-        print(f"✗ 读不到面板：{PANEL}（{type(exc).__name__}）")
-        return 1
     if raw.startswith("\ufeff"):
         notices.append("文件带 BOM（注入端能容忍，建议去掉）")
         raw = raw.lstrip("\ufeff")
@@ -947,10 +1021,11 @@ def cmd_check(args) -> int:
         errors.append("session_id 为空（空值=无效，注入端会跳过；作用于全部要写 any）")
     elif scope and scope.lower() not in {"any", "*"} and len(scope) < 8:
         notices.append(f"session_id 看起来不像会话 id：{scope!r}")
-    enabled = meta.get("enabled", "true").lower()
-    if enabled not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
-        errors.append(f"enabled 取值不合法：{meta.get('enabled')!r}")
-    elif enabled in {"false", "0", "no", "off"}:
+    enabled = _enabled_value(meta)
+    if enabled is None:
+        errors.append(f"enabled 取值不合法：{meta.get('enabled')!r}"
+                      "（只认 true/false/1/0/yes/no/on/off；非法值注入端会整块跳过）")
+    elif not enabled:
         notices.append("面板已暂停（enabled=false）：注入会被跳过（hudctl on 恢复）")
     expires = parse_expiry(meta.get("expires_at", ""))
     if expires is None:
@@ -973,8 +1048,40 @@ def cmd_check(args) -> int:
         errors.extend(hud_panel.validate(body))
     estimate = estimate_block(meta, body, expires)
     if estimate > MAX_BLOCK_CHARS:
-        errors.append(f"注入块约 {estimate} 字（标题行 + 正文 + 注入尾行，另含 "
-                      f"{BLOCK_MARGIN} 字提醒余量），超过 {MAX_BLOCK_CHARS} 上限（会被截断）")
+        # 只是「整块会被截断」的提醒：正文上限由 set 单独拦（>1600 才拒），这里不判红，
+        # 否则正文 1590 字这种完全可用（截断也保住大部分）的面板会被 check 卡死。
+        notices.append(f"注入块约 {estimate} 字（标题行 + 正文 + 注入尾行，另含 "
+                       f"{BLOCK_MARGIN} 字提醒余量），超过 {MAX_BLOCK_CHARS} 上限（注入时会被截断）")
+    return {"errors": errors, "notices": notices, "meta": meta, "body": body,
+            "scope": scope, "estimate": estimate}
+
+
+def cmd_check(args) -> int:
+    """校验面板格式：**只有真格式错**让 exit code 变 1；过期/暂停/范围/整块超长是「状态提示」。
+
+    状态提示不算失败：面板过期是正常状态（注入会跳过），把它当机制坏了的判据就是假红。
+    超大面板只读头部/只报大小，不把几百 KB 读进来再解析。
+    """
+    if not PANEL.exists():
+        print(f"✗ 面板不存在：{PANEL}")
+        return 1
+    size = _panel_size()
+    if size > MAX_PANEL_BYTES:
+        print(f"✗ 面板过大（{size} 字节 > {MAX_PANEL_BYTES}）：{PANEL}"
+              f"（可用 set --body <文件> 整份覆盖；本命令只读头部）")
+        return 1
+    try:
+        raw = PANEL.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        print(f"✗ 面板不是合法 UTF-8：{PANEL}")
+        return 1
+    except OSError as exc:
+        print(f"✗ 读不到面板：{PANEL}（{type(exc).__name__}）")
+        return 1
+    data = _inspect_panel(raw)
+    errors, notices = data["errors"], data["notices"]
+    meta, body, scope = data["meta"], data["body"], data["scope"]
+    estimate = data["estimate"]
 
     if getattr(args, "json", False):
         print(json.dumps({"ok": not errors, "errors": errors, "notices": notices,
@@ -1052,11 +1159,34 @@ def _snapshot_key(path: Path):
     return (day.year, day.month, day.day, hh, mm, ss, int(m.group("seq") or 0))
 
 
+def _ensure_snaps() -> None:
+    """快照目录必须是目录且可建；被放成同名文件时友好退出（别抛 traceback）。"""
+    if SNAPS.exists() and not SNAPS.is_dir():
+        _die(f"快照目录 {SNAPS} 是个文件，不是目录：先把它移走再跑 snapshot/restore/prune")
+    try:
+        SNAPS.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _die(f"建不了快照目录：{SNAPS}（{type(exc).__name__}: {exc}）")
+
+
 def _snapshots() -> list[Path]:
-    """快照目录里的合法快照，按时间（取自文件名）从旧到新；杂项 .md 不算。"""
+    """快照目录里的合法快照，按时间（取自文件名）从旧到新；杂项 .md / 同名目录都不算。"""
     found = [(key, path.name, path) for path in SNAPS.glob("*.md")
-             if (key := _snapshot_key(path)) is not None]
+             if path.is_file() and (key := _snapshot_key(path)) is not None]
     return [path for _, _, path in sorted(found)]
+
+
+def _snapshot_named(name: str) -> Path:
+    """--file / 位置参数里的快照文件名：只认基名，不许带路径，必须是普通文件。"""
+    clean = (name or "").strip()
+    if not clean:
+        raise SystemExit("快照文件名不能为空：给 snapshots/ 下的名字（如 pre-restore-2026-10-22-120000.md）")
+    if Path(clean).name != clean:
+        raise SystemExit(f"--file 只认文件名，不能带路径：{clean}")
+    target = SNAPS / clean
+    if not target.is_file():
+        raise SystemExit(f"快照不存在：{target}")
+    return target
 
 
 def _snapshot_target(now: datetime) -> Path:
@@ -1104,44 +1234,80 @@ def _pre_restore_target(now: datetime) -> Path:
 
 
 def cmd_snapshot(_args) -> int:
-    SNAPS.mkdir(exist_ok=True)
-    _meta, body = read_panel()
-    target = _snapshot_target(datetime.now(CST))
-    try:
-        _snapshot_to(target)
-    except OSError as exc:
-        raise SystemExit(f"快照失败（{type(exc).__name__}: {exc}）：{SNAPS} 不可写？")
-    print(f"快照：{target}（{len(body)} 字）")
+    _ensure_snaps()
+    with panel_lock():          # 持锁复制：并发 set 不能让我们拍到半份/新旧交界的文件
+        if not PANEL.exists():
+            read_panel(create=True)     # 保持旧行为：面板不存在时先从 panel.example.md 复制
+        size = _panel_size()
+        target = _snapshot_target(datetime.now(CST))
+        try:
+            _snapshot_to(target)
+        except OSError as exc:
+            raise SystemExit(f"快照失败（{type(exc).__name__}: {exc}）：{SNAPS} 不可写？")
+        if size <= MAX_PANEL_BYTES:
+            _meta, body = read_panel(create=False)
+            detail = f"{len(body)} 字"
+        else:
+            detail = f"{size} 字节（过大，已原样快照）"
+    print(f"快照：{target}（{detail}）")
     return 0
 
 
-def cmd_restore(args) -> int:
-    SNAPS.mkdir(exist_ok=True)
-    if args.date != "latest" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
-        raise SystemExit(f"日期格式应为 YYYY-MM-DD 或 latest：{args.date}")
-    snaps = _snapshots()
+def _resolve_restore_target(args) -> Path:
+    """把参数解析成一份快照文件：latest / YYYY-MM-DD / --file <名> / pre-restore-*.md。"""
+    wanted_file = getattr(args, "file", None)
+    positional = getattr(args, "date", None)
+    if wanted_file:
+        return _snapshot_named(wanted_file)
+    if not positional:
+        raise SystemExit("给日期（YYYY-MM-DD / latest）或用 --file <快照文件名>")
+    if positional.lower().endswith(".md"):
+        # 允许直接写 pre-restore-2026-10-22-120000.md 这类文件名
+        return _snapshot_named(positional)
+    if positional != "latest" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", positional):
+        raise SystemExit(f"日期格式应为 YYYY-MM-DD 或 latest：{positional}")
+    snaps = _snapshots()        # pre-restore-*.md 不匹配快照命名，永远不参与 latest
     if not snaps:
         raise SystemExit("没有快照可恢复")
-    if args.date == "latest":
-        target = snaps[-1]
-    else:
-        wanted = tuple(int(part) for part in args.date.split("-"))
-        same_day = []
-        for path in snaps:
-            key = _snapshot_key(path)
-            if key is not None and key[:3] == wanted:
-                same_day.append(path)
-        if not same_day:
-            raise SystemExit(f"没有这份快照：{args.date}（{SNAPS} 下没有该日快照）")
-        target = same_day[-1]  # 同日多份 → 取最新一份
+    if positional == "latest":
+        return snaps[-1]
+    wanted = tuple(int(part) for part in positional.split("-"))
+    same_day = []
+    for path in snaps:
+        key = _snapshot_key(path)
+        if key is not None and key[:3] == wanted:
+            same_day.append(path)
+    if not same_day:
+        raise SystemExit(f"没有这份快照：{positional}（{SNAPS} 下没有该日快照）")
+    return same_day[-1]          # 同日多份 → 取最新一份
+
+
+def cmd_restore(args) -> int:
+    _ensure_snaps()
+    target = _resolve_restore_target(args)
     try:
-        meta, body = split_panel(target.read_text(encoding="utf-8"))
+        text = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         raise SystemExit(f"快照不是合法 UTF-8：{target}")
+    except OSError as exc:
+        raise SystemExit(f"读不到快照：{target}（{type(exc).__name__}）")
+    # 先像 check 一样验一遍**快照本身**：坏快照写进去等于把现网面板一起弄坏，宁可不恢复
+    raw_report = _inspect_panel(text)
+    if raw_report["errors"]:
+        _die(f"快照 {target.name} 内容不合法，拒绝覆盖现网面板："
+             + "；".join(raw_report["errors"][:4]))
+    meta, body, unknown = _split_panel_ex(text.lstrip("\ufeff"))
+    if unknown:
+        _die(f"快照 {target.name} 头部有未知键（{', '.join(unknown)}），拒绝恢复")
     if args.session:
         meta["session_id"] = args.session
     meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
     meta["enabled"] = "true"
+    candidate = render_panel(meta, body)
+    final_report = _inspect_panel(candidate)   # 改写元数据之后再验一遍（要写进去的就是它）
+    if final_report["errors"]:
+        _die(f"快照 {target.name} 恢复后仍不合法，拒绝写入："
+             + "；".join(final_report["errors"][:4]))
     with panel_lock():
         pre = None
         if PANEL.exists():
@@ -1162,11 +1328,14 @@ def cmd_prune(args) -> int:
     """默认只列清单；加 --yes 才真删。只动本工具命名的快照，手工 .md 一律不碰。"""
     if args.keep < 1:
         raise SystemExit(f"--keep 必须 >= 1：{args.keep}")
+    if SNAPS.exists() and not SNAPS.is_dir():
+        raise SystemExit(f"快照目录 {SNAPS} 是个文件，不是目录：先把它移走再跑 prune")
     snaps = _snapshots()  # 新旧两种命名混排，按文件名里的时间从旧到新
     drop = snaps[: max(0, len(snaps) - args.keep)]
     strays = []
     if SNAPS.is_dir():
-        strays = sorted(p.name for p in SNAPS.glob("*.md") if _snapshot_key(p) is None)
+        strays = sorted(p.name for p in SNAPS.glob("*.md")
+                        if p.is_file() and _snapshot_key(p) is None)
     if not args.yes:
         print(f"将保留最近 {min(args.keep, len(snaps))} 份，待删除 {len(drop)} 份（未删除）")
         for path in drop:
@@ -1190,7 +1359,9 @@ def cmd_prune(args) -> int:
     restored = [name for name in strays if name.startswith("pre-restore-")]
     manual = [name for name in strays if not name.startswith("pre-restore-")]
     if restored:
-        print(f"（恢复前现场快照 {len(restored)} 份：不参与 latest / 不计入 prune，需要时自行清理）")
+        print(f"（恢复前现场快照 {len(restored)} 份：不参与 latest / 不计入 prune；"
+              f"确要清理请手动删除 {SNAPS}{os.sep}pre-restore-*.md，或用 "
+              f"restore --file <名> 先取回再删）")
     if manual:
         print(f"（另有 {len(manual)} 个非本工具命名的 .md，是手工文件：不计入快照、也不删除："
               f"{', '.join(manual[:5])}{' …' if len(manual) > 5 else ''}）")
@@ -1242,7 +1413,9 @@ def main() -> int:
     p_on.set_defaults(func=cmd_toggle("true"))
     sub.add_parser("snapshot").set_defaults(func=cmd_snapshot)
     p_restore = sub.add_parser("restore")
-    p_restore.add_argument("date", help="YYYY-MM-DD 或 latest")
+    p_restore.add_argument("date", nargs="?", default=None,
+                           help="YYYY-MM-DD 或 latest（用 --file 时可省略；也可直接给快照文件名）")
+    p_restore.add_argument("--file", help="按文件名恢复（含 pre-restore-*.md）；与日期二选一")
     p_restore.add_argument("--ttl", default="12h")
     p_restore.add_argument("--session")
     p_restore.set_defaults(func=cmd_restore)

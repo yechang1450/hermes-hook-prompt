@@ -121,12 +121,15 @@ enabled: true                                  # off 即暂停，不用删配置
 
 - **标注非法 = 对谁都不生效**（fail-closed），不会退化成“全员可见”；`check` 会把它报出来，注入日志带 `invalid_scope=N`。半个 token（`[scope: session:A profile:p]`）同样判非法，不会把 `profile:p` 当成会话 id。
 - **标注也可以写在续行行首**（缩进不限），算这一条的；同一 entry 写两处标注 = 整条失效，`check` 报错。
+- **续行行首的标注只有写得合法才算标注**：`[scope: session 123]` 这种解析不了的，按普通正文原样保留（不会被删、也不会连带整条失效），`check` 单独告警「续行标注非法」。
+- **写了 `[scope:]` 却没有任何可识别条目**（例如整块缩进成段落）：整块不注入（绝不把带标签的原文广播给所有会话），`check` 报格式错。
 - 条目必须**顶格**写；缩进行算上一条的续行，不会被当成新条目。
 - 第一个条目之前的标题/前言（如 `## 硬约束`）原样保留；代码围栏里的编号不算条目。
 - **代码围栏没闭合 = 整块不注入**（条目边界不可信，`[scope:]` 可能原样漏进上下文）；`check` 报格式错，日志 `skip degenerate-panel`。
 - 标注写在**行尾**（不在行首）不会被解释、也不会被删，`check` 会告警。
 - **头部出现未知键**（如 `owner: xxx` 这类不在四行元数据里的 `key: value`）= 整块不注入；`check` 报错并提示「未知键会让整块失效」，绝不把元数据当正文塞进上下文。
 - **`session_id` 空值/没写 = 无效**（不等于 any）：注入端直接跳过；要作用于全部必须显式写 `any`。
+- **`enabled` 只认 `true/false/1/0/yes/no/on/off`**：写别的（`maybe`、`ture`）不是“默认开”，而是注入端直接跳过 + `check` 报错（fail-closed，白名单与 check 共用一张表）。
 - 缺 `hud_panel.py`（解析器）时注入端整块跳过，不会把带 `[scope:]` 的原文原样注进去。
 - `[scope: session:X]` 只命中 **X 这一条会话**；X 派出的子代理有独立 session id，不会自动继承（要让子代理也看到，用 `profile:` 或 `all`）。
 
@@ -154,18 +157,19 @@ python hudctl.py impact --profile default,ceo --kinds chat,cron  # 只看指定�
 
 ## 四、日常操作（`hudctl.py`）
 
-面板正文是**压缩版**（现行正文 1156 字、整块约 1340 字，以 `hudctl.py status` 为准；完整措辞存档在 `docs/panel-full-text.md`，规则条数与约束一一对应）。
+面板正文是**压缩版**（现行正文 1156 字、整块约 1280 字，以 `hudctl.py status` 为准；完整措辞存档在 `docs/panel-full-text.md`，规则条数与约束一一对应）。
 
 注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向 OTUI（`build/open-tui-orchestrator`）。
 
 ```bash
 python hudctl.py status                     # 范围、到期、剩多久、正文字数
-python hudctl.py set --ttl 12h --body b.md  # 换正文并续期（不给 --body 就从 stdin 读；空正文/超 1600 字/非 UTF-8 一律拒绝，exit 2）
+python hudctl.py set --ttl 12h --body b.md  # 换正文并续期（不给 --body 就从 stdin 读；空正文/超 1600 字/非 UTF-8 一律拒绝，exit 2；整块估长超限只警告不拒写）
 python hudctl.py off / on                   # 暂停 / 恢复；on --ttl 8h 顺手续期（过期且没给 --ttl 会明确拒绝并提示）
-python hudctl.py snapshot                   # 存当天快照到 snapshots/
+python hudctl.py snapshot                   # 存当天快照到 snapshots/（持面板锁复制，不会拍到半份）
 python hudctl.py restore latest --ttl 8h    # 从快照恢复；恢复前自动拍 pre-restore-<时间>.md，拍不成拒绝恢复
+python hudctl.py restore --file pre-restore-2026-10-22-120000.md --ttl 8h   # 按文件名恢复（含恢复前现场照；位置参数写文件名也可以）
 python hudctl.py prune --keep 14            # 只列清单（默认不删）；加 --yes 才真删，且只删本工具命名的 .md
-python hudctl.py check                      # 只把真格式错判失败；过期/暂停/范围不匹配算「状态提示」（--json 分开，--strict 也算失败）
+python hudctl.py check                      # 只把真格式错判失败；过期/暂停/范围不匹配/整块估长超 1600 都算「状态提示」（--json 分开，--strict 也算失败）
 python hudctl.py sessions                   # 列出所有档最近的会话（default + profiles/* 的 state.db，只读）
 python hudctl.py impact [--verbose|--json] [--profile p,p] [--kinds chat,cron]  # 盘点会话：哪些生效、哪些不生效、为什么（分类：对话/cron/kanban/oneshot/子代理）；可按档/分类筛选
 python hudctl.py preview --body new.md     # 预览一次改动的覆盖变化（新增/失去生效、条目增删），不写入
@@ -174,9 +178,17 @@ python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个�
 ```
 
 写面板一律「读-改-写 + 同一把文件锁 + 临时文件原子替换」：并发跑 `set`/`off` 不会互相覆盖丢更新，
-写失败也不会在目录里留半份临时文件；读面板有 200 KB 上限（超过直接拒绝，避免误放大文件）。
+写失败也不会在目录里留半份临时文件。**面板被写坏成几百 KB 也能自救**：`status`/`check` 只读头部
+（超过 200 KB 只报大小与「用 set 整份覆盖」），`set` 只读头部里的元数据再整份重写，不因「读不了整份」被卡住。
+整份读取的硬上限是 2 MB。
+
 快照命名有语义：当天首份 `YYYY-MM-DD.md`，同日再拍 `YYYY-MM-DD-HHMMSS.md`；
-`restore latest` 只认这两种命名，恢复前的现场快照叫 `pre-restore-<时间戳>.md`，既不参与 latest 也不会被 prune 删掉。
+`restore latest` 只认这两种命名，恢复前的现场快照叫 `pre-restore-<时间戳>.md`，既不参与 latest 也不会被 prune 删掉；
+要回到某份现场照，用 `restore --file <名>`（或位置参数直接写文件名）。`prune` 不会删这些现场照，
+需要清理时手动删 `snapshots/pre-restore-*.md`。
+
+`restore` 写入前会先按 `check` 的同一套规则验快照内容：缺元数据、头部未知键、围栏未闭合、作用域非法、
+正文为空、`enabled` 非法等一律 **exit 2 且不动现网面板**（也不生成 pre-restore）；坏快照不能把现网面板一起写坏。
 
 `hud_report.py` 读 `hud.log`，按档统计注入与跳过（过期、会话不匹配、关闭），并汇总**作用域过滤**（多少轮有条目被筛掉、`invalid_scope` 次数），格式不识别的行会单独计数提示（不再静默丢弃）：
 
@@ -196,14 +208,15 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 查七项：模块（`hud_panel.py` 在不在）、事件还在不在、注入点还在不在、本档 config 声明、allowlist 同意、端到端注入、面板格式。
 
-两条口径很重要（都是防假红）：
+三条口径很重要（都是防假红）：
 
+- **源码根向上找**：`<HERMES_HOME>/hermes-agent`，找不到就看父目录、祖父目录——`HERMES_HOME` 指到 `profiles/<名>` 时源码其实在上一级。**连这三层都找不到源码时只记 `notices`（提示「跳过源码检查」），不判红**：这通常是字段名/安装形态不同，不是机制坏了；判红会把 `status: error` 写进所有档共用的 state，让每轮注入都挂警告。配置与 allowlist 也按「家目录是否已经是某个档」自动定位，不会拼出 `profiles/x/profiles/x`。
 - **端到端用临时 fixture 面板**（`session_id: any` + 未来到期 + 一条无 scope 条目）验注入通路。绝不用现网面板——它限定别的会话、过期、`enabled: false`、条目全被筛空时都会安静退出，拿它当机制判据就会把「面板状态」误报成「机制坏了」，每轮注入尾行挂一句误导的「适配新版」。
 - **面板格式只把 `check --json` 的 `errors` 当失败**；过期/暂停/范围不匹配进 `notices`（输出里的「状态提示」），不影响机制判定（`check --strict` 才把它们也算失败）。
 
-结果写 `state/selfcheck.json`（临时文件 + 原子替换；自检自己异常也落一份 `status: error`，不会留旧的 ok）。指纹是**关键源码文件的内容 sha256**，inject 与 selfcheck 用同一实现、同一 `HERMES_HOME` 口径——`git checkout`/`touch` 一下 mtime 不会误报「已更新」，真改了内容才会。
+结果写 `state/selfcheck.json`（临时文件 + 原子替换；自检自己异常也落一份 `status: error`，不会留旧的 ok）。指纹是**关键源码文件的内容 sha256**，inject 与 selfcheck 用同一实现；源码根由同一套向上解析逻辑决定，所以**同一份源码无论从哪个档跑，指纹都相同**——profile 与 default 不会再互相比出「已更新」。`git checkout`/`touch` 一下 mtime 不会误报「已更新」，真改了内容才会；找不到源码时指纹为空串，也不会拿空值硬比出「已更新」。
 
-`hud_inject.py` 每轮对比指纹：**更新后第一次注入就会多一行提醒**「Hermes 已更新、机制未复检：先跑 selfcheck.py」；自检通过后提醒自动消失。指纹不变、自检通过时不会多任何一个字。
+`hud_inject.py` 每轮对比指纹：**更新后第一次注入就会多一行提醒**「Hermes 已更新、机制未复检：先跑 selfcheck.py」；自检通过后提醒自动消失。指纹不变、自检通过时不会多任何一个字。尾行提醒按失败项给不同指引：只有 `panel:*` 失败 → 提示先跑 `hudctl.py check`；只有 `source:*` 失败 → 才提「适配新版」；`config:*`/`allowlist:*` 失败 → 提示按安装步骤补齐声明与同意；不同类同时失败就分行写，避免面板格式问题被误报成版本问题。
 
 ## 六、怎么验证「真的被听见」
 
@@ -227,13 +240,13 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-128 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+160 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符/整块估长含尾行与余量）/ UTC 到期按本地显示 / `preview` 条目 diff 按完整正文（重复按次数计）/ 报告统计与参数校验；外加 13 项防假红与 fail-closed 回归（见 `tests/test_hardening.py`：自检不用现网面板判定、缺解析器/围栏未闭合不原样注入、空 `session_id` 不注入且 check 判错、restore 前自动备份且拍不成拒绝恢复、prune 默认只列清单与 `--yes`、`on --ttl`、头部未知键 fail-closed、续行 scope、`set` 写入校验、状态原子写与 `status: error`、内容哈希指纹、面板大小上限与并发锁、`parse_scope` 半个 token 与 `use` 精确匹配不限 300 条）。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
+覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符/整块估长含尾行与余量）/ UTC 到期按本地显示 / `preview` 条目 diff 按完整正文（重复按次数计）/ 报告统计与参数校验；外加 13 项防假红与 fail-closed 回归（见 `tests/test_hardening.py`：自检不用现网面板判定、缺解析器/围栏未闭合不原样注入、空 `session_id` 不注入且 check 判错、restore 前自动备份且拍不成拒绝恢复、prune 默认只列清单与 `--yes`、`on --ttl`、头部未知键 fail-closed、续行 scope、`set` 写入校验、状态原子写与 `status: error`、内容哈希指纹、面板大小上限与并发锁、`parse_scope` 半个 token 与 `use` 精确匹配不限 300 条）。反向审查 10 项回归见 `tests/test_reverse_audit.py`：profile 家目录自检不红、找不到源码只作 notice、指纹与档无关、尾行按 panel/source 分类措辞、1403 字正文 + 28 字会话 id 可保存、零条目带 `[scope:]` fail-closed、续行非法标注保留原文、`restore --file` 与非法快照拒绝、超大面板可被 `set` 覆盖、`enabled` 白名单；另有 `scope` 只删行首标签、锁路径/快照目录类型、snapshot glob 过滤目录。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
 
 ## 八、边界与安全（先说清楚）
 
@@ -257,7 +270,7 @@ python -m unittest discover -s tests -v
 | `selfcheck.py` | Hermes 更新后的机制体检（7 项），写 `state/selfcheck.json` |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/` | 单元测试（标准库 unittest，共 127）：`test_hud.py` 主流程（51）、`test_selfcheck.py` 机制自检与假红回归（11）、`test_scope.py` 作用域与 impact（10）、`test_scope_regressions.py` 缺陷回归（15）、`test_hardening.py` 13 项必修回归（40） |
+| `tests/` | 单元测试（标准库 unittest，共 160）：`test_hud.py` 主流程（52）、`test_selfcheck.py` 机制自检与假红回归（11）、`test_scope.py` 作用域与 impact（10）、`test_scope_regressions.py` 缺陷回归（15）、`test_hardening.py` 13 项必修回归（40）、`test_reverse_audit.py` 反向审查 10 项回归（32） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 

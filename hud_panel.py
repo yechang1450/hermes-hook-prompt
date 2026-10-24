@@ -16,8 +16,9 @@
      解析口径：一个新条目 = 以 `1.` / `1)` / `1、` / `-` / `*` 开头的顶格行；
      缩进的续行归上一条；空行保留在原来位置；代码围栏里的内容不参与解析。
 
-  3. 机制指纹：关键源码文件的**内容哈希**（不是 size+mtime），inject 与 selfcheck 同一口径，
-     家目录口径也由 hermes_home() 统一。
+  3. 机制指纹：关键源码文件的**内容哈希**（不是 size+mtime），inject 与 selfcheck 同一口径。
+     源码根从家目录向上找 `hermes-agent`（HERMES_HOME 指到 profiles/<名> 时也能找到），
+     因此指纹只跟源码内容走，与当前档无关。
 """
 from __future__ import annotations
 
@@ -37,6 +38,12 @@ META_KEYS = ("session_id", "expires_at", "title", "enabled")
 META_SCAN_LINES = 24
 KINDS = ("all", "session", "profile")
 
+# enabled 的合法取值表（inject / ctl check / impact 共用一张表：非法值一律 fail-closed）
+ENABLED_TRUE = frozenset({"true", "1", "yes", "on"})
+ENABLED_FALSE = frozenset({"false", "0", "no", "off"})
+ENABLED_VALUES = ENABLED_TRUE | ENABLED_FALSE
+
+
 MECH_FILES = (
     "agent/turn_context.py",
     "hermes_cli/plugins_dispatch.py",
@@ -55,6 +62,20 @@ def strip_comment(value: str) -> str:
         if idx != -1:
             value = value[:idx]
     return value.strip()
+
+
+def parse_enabled(value) -> bool | None:
+    """enabled 取值 → True / False；不在白名单里返回 None。
+
+    注入端拿到 None 必须 fail-closed（跳过），不能因为「不认识」就当成启用——
+    那等于把 `enabled: maybe` 当默认开，白名单就白写了。
+    """
+    text = ("" if value is None else str(value)).strip().lower()
+    if text in ENABLED_TRUE:
+        return True
+    if text in ENABLED_FALSE:
+        return False
+    return None
 
 
 def split_meta(text: str) -> tuple[dict[str, str], str, list[str]]:
@@ -166,10 +187,13 @@ def degenerate_reason(body: str) -> str:
 
 
 def entries(body: str) -> list[dict]:
-    """切成条目：{start,end,scope_token,scope,scope_line,conflict}。
+    """切成条目：{start,end,scope_token,scope,scope_line,conflict,invalid_continuation}。
 
     scope=None 表示非法或未标注（未标注时由调用方补默认范围）；
     scope_line 是写在续行行首的那处标注的行号（删除标注时用）；同一 entry 两处标注 → conflict。
+
+    续行行首的 `[scope: …]` **只有解析得出来才算标注**：写法非法时按普通续行文本原样保留
+    （列进 invalid_continuation 供 check 告警），绝不因为一句写坏的标注把整条丢掉。
     """
     lines = body.splitlines()
     mask = _fence_mask(lines)
@@ -184,21 +208,27 @@ def entries(body: str) -> list[dict]:
         token = m.group(1) if m else None
         scope_line = None
         conflict = False
+        invalid_continuation: list[str] = []
         for i in range(start + 1, end):
             if mask[i]:
                 continue
             mm = SCOPE_RE.match(lines[i])
             if not mm:
                 continue
+            found = mm.group(1)
+            if parse_scope(found) is None:
+                invalid_continuation.append(found)   # 非法：不当标注，正文原样留着
+                continue
             if token is not None:
                 conflict = True
                 scope_line = i
             else:
-                token, scope_line = mm.group(1), i
+                token, scope_line = found, i
             break
         scope = None if conflict else (parse_scope(token) if token else None)
         out.append({"start": start, "end": end, "scope_token": token, "scope": scope,
-                    "scope_line": scope_line, "conflict": conflict})
+                    "scope_line": scope_line, "conflict": conflict,
+                    "invalid_continuation": invalid_continuation})
     return out
 
 
@@ -222,10 +252,16 @@ def _strip_leading_scope(line: str) -> str:
 
 def filter_body(body: str, session_id: str, profile: str,
                 default_scope=None) -> tuple[str, int, int]:
-    """按作用域过滤正文，并删掉 [scope: …] 标注。返回 (新正文, 保留条数, 总条数)。"""
+    """按作用域过滤正文，并删掉 [scope: …] 标注。返回 (新正文, 保留条数, 总条数)。
+
+    零条目时：不带 `[scope:]` 的自由正文按一整块放行（旧行为）；带标注却解析不出条目
+    → 返回空正文 + 0 条，调用方必须跳过——绝不把带标签的原文原样广播给所有会话。
+    """
     lines = body.splitlines()
     items = entries(body)
     if not items:
+        if INLINE_SCOPE_RE.search(body):
+            return "", 0, 0
         return body, 1, 1
     out: list[str] = lines[: items[0]["start"]]  # 保留第一个条目之前的标题/前言
     kept = 0
@@ -295,18 +331,26 @@ def invalid_scopes(body: str) -> list[str]:
 
 
 def validate(body: str) -> list[str]:
-    """返回作用域相关的告警（非法 / 两处冲突 / 不在行首）。"""
+    """返回作用域相关的告警（非法 / 两处冲突 / 不在行首 / 带标注却没有条目）。"""
     warns: list[str] = []
-    for item in entries(body):
+    items = entries(body)
+    for item in items:
         if item["scope_token"] is None:
             continue
         if item["conflict"]:
             warns.append(f"[scope: {item['scope_token']}] 同一 entry 写了两处标注（注入时整条失效）")
         elif item["scope"] is None:
             warns.append(f"[scope: {item['scope_token']}] 非法（只认 all / session:id / profile:name）")
+    for item in items:
+        for token in item.get("invalid_continuation") or []:
+            warns.append(f"[scope: {token}] 续行标注非法（只认 all / session:id / profile:name）："
+                         "已按普通文本保留，不生效也不删除")
+    if not items and INLINE_SCOPE_RE.search(body):
+        warns.append("正文里写了 [scope: …] 却没有任何可识别条目：注入会整块跳过"
+                     "（条目必须以 1. / 1) / - / * 顶格开头）")
     lines = body.splitlines()
     mask = _fence_mask(lines)
-    for item in entries(body):
+    for item in items:
         for idx in range(item["start"], item["end"]):
             if mask[idx]:
                 continue
@@ -344,14 +388,56 @@ def hermes_home() -> str:
     return os.path.join(home, ".local", "share", "hermes")
 
 
+def is_profile_home(home: str | None = None) -> bool:
+    """HERMES_HOME 是否已经指到某个档的家目录（布局：<base>/profiles/<名>）。
+
+    Hermes 用 profile 跑会话时 HERMES_HOME 可能直接是 profile 目录；此时 config.yaml /
+    allowlist 就在它自己下面，不能再拼一层 `profiles/<名>`。
+    """
+    path = os.path.abspath(home or hermes_home())
+    return os.path.basename(os.path.dirname(path)) == "profiles"
+
+
+def profile_home(home: str | None = None, profile: str = "default") -> str:
+    """某档的家目录：default → 家目录；其它档 → <home>/profiles/<名>（除非 home 本身就是它）。"""
+    base = os.path.abspath(home or hermes_home())
+    if is_profile_home(base):
+        return base
+    if (profile or "default") == "default":
+        return base
+    return os.path.join(base, "profiles", profile)
+
+
+def source_root(home: str | None = None) -> str | None:
+    """Hermes 源码根：从家目录向上最多三层找 `hermes-agent`。
+
+    profile 家目录（.../profiles/x）里没有源码，但它的父目录、祖父目录里有；不向上找就会
+    把「在 profile 里跑自检」误判成「机制没了」，写一份 error 状态让所有档每轮告警。
+    找不到返回 None（调用方降级为 notice，不判红）。
+    """
+    current = os.path.abspath(home or hermes_home())
+    for _ in range(3):                     # home / home.parent / home.parent.parent
+        candidate = os.path.join(current, "hermes-agent")
+        if os.path.isdir(candidate):
+            return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
 def mech_fingerprint(home: str | None = None) -> str:
-    """关键源码文件的**内容** sha256。
+    """关键源码文件的**内容** sha256；只在解析出的源码根上算。
 
     不再用 size+mtime：同样的文件被 checkout 一遍 mtime 就变（假红），
     而改了内容但大小/时间没变则会漏报。inject 与 selfcheck 都调这一份，
-    保证「同一口径」——否则一端算出来的指纹永远对不上另一端写的值。
+    且源码根由 source_root() 向上解析——profile 与 default 算出来必然同一个值。
+    找不到源码返回空串（没有内容可哈希，绝不用占位串伪造一个「变了」的指纹）。
     """
-    source = os.path.join(home or hermes_home(), "hermes-agent")
+    source = source_root(home)
+    if not source:
+        return ""
     digest = hashlib.sha256()
     for rel in MECH_FILES:
         digest.update(rel.encode())
