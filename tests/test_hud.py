@@ -4,6 +4,7 @@
 """
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -13,7 +14,9 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SCRIPTS = ["hud_inject.py", "hudctl.py", "hud_report.py", "panel.example.md"]
+SCRIPTS = ["hud_inject.py", "hudctl.py", "hud_report.py", "hud_panel.py", "panel.example.md"]
+# 这三个变量若被外部环境污染（如同 shell 里跑过隔离实验），测试会读写错面板
+ENV_KEYS = ("HUD_PANEL", "HUD_LOG", "HUD_SNAPS", "HUD_STATE")
 
 
 class HudCase(unittest.TestCase):
@@ -28,6 +31,12 @@ class HudCase(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     # ---- helpers -------------------------------------------------
+    @staticmethod
+    def base_env(**extra):
+        env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
+        env.update(extra)
+        return env
+
     def write_panel(self, body="正文", session="any", expires="2099-01-01T00:00:00+08:00",
                     title="测试面板", enabled="true", prefix=""):
         self.panel.write_text(
@@ -39,14 +48,14 @@ class HudCase(unittest.TestCase):
         )
 
     def inject_json(self, payload):
-        env = dict(os.environ, HUD_PANEL=str(self.panel), HUD_LOG=str(self.log))
+        env = self.base_env(HUD_PANEL=str(self.panel), HUD_LOG=str(self.log))
         out = subprocess.run([sys.executable, str(self.dir / "hud_inject.py")], input=payload,
                              capture_output=True, text=True, encoding="utf-8", errors="replace",
                              env=env, timeout=180)
         return out.returncode, out.stdout.strip()
 
     def inject(self, session="s1", profile="default"):
-        env = dict(os.environ, HUD_PANEL=str(self.panel), HUD_LOG=str(self.log))
+        env = self.base_env(HUD_PANEL=str(self.panel), HUD_LOG=str(self.log))
         out = subprocess.run(
             [sys.executable, str(self.dir / "hud_inject.py")],
             input=json.dumps({"session_id": session, "profile": profile}),
@@ -57,6 +66,25 @@ class HudCase(unittest.TestCase):
     @staticmethod
     def context(stdout):
         return json.loads(stdout)["context"] if stdout else ""
+
+    def write_snapshot(self, root, name, body):
+        """在临时快照目录里造一份指定命名的快照（restore/prune 用固定文件名才可复现）。"""
+        snaps = Path(root)
+        snaps.mkdir(parents=True, exist_ok=True)
+        (snaps / name).write_text(
+            "session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\n"
+            f"title: 快照 {name}\nenabled: true\n\n{body}\n",
+            encoding="utf-8",
+        )
+
+    def history_snaps(self):
+        """三天四份快照：同日既有 YYYY-MM-DD.md 也有带时间的。"""
+        snaps = self.dir / "snaps"
+        self.write_snapshot(snaps, "2026-10-23.md", "昨天版本")
+        self.write_snapshot(snaps, "2026-10-24.md", "早上版本")
+        self.write_snapshot(snaps, "2026-10-24-101500.md", "上午版本")
+        self.write_snapshot(snaps, "2026-10-24-194500.md", "晚上版本")
+        return self.base_env(HUD_SNAPS=str(snaps), HUD_PANEL=str(self.panel))
 
     # ---- 注入行为 ------------------------------------------------
     def test_inject_any_session(self):
@@ -107,6 +135,7 @@ class HudCase(unittest.TestCase):
 
     # ---- hudctl ---------------------------------------------------
     def run_ctl(self, *args, env=None):
+        env = env or self.base_env()
         return subprocess.run([sys.executable, str(self.dir / "hudctl.py"), *args],
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               cwd=self.dir, timeout=60, env=env)
@@ -199,7 +228,7 @@ class HudCase(unittest.TestCase):
                         " last_activity_at real, message_count int, archived int default 0, hidden int default 0)")
             con.execute("insert into sessions values (?,?,?,?,?,0,0)", (sid, title, "x", 1760000000, 1))
             con.commit(); con.close()
-        env = dict(os.environ, HERMES_HOME=str(home))
+        env = self.base_env(HERMES_HOME=str(home))
         out = self.run_ctl("sessions", env=env).stdout
         self.assertIn("默认会话", out)
         self.assertIn("九号会话", out)
@@ -210,7 +239,7 @@ class HudCase(unittest.TestCase):
         self.log.with_name(self.log.name + ".1").write_text(
             "2026-01-01T00:00:00+08:00 inject session=old profile=work chars=10\n", encoding="utf-8")
         self.inject()
-        env = dict(os.environ, HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        env = self.base_env(HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=180)
         self.assertIn("work", r.stdout)
@@ -221,7 +250,7 @@ class HudCase(unittest.TestCase):
         alt = self.dir / "alt.md"
         alt.write_text("session_id: any\nexpires_at: 2099-01-01T00:00:00+08:00\ntitle: alt\n"
                        "enabled: true\n\nALT\n", encoding="utf-8")
-        env = dict(os.environ, HUD_PANEL=str(alt))
+        env = self.base_env(HUD_PANEL=str(alt))
         out = self.run_ctl("status", env=env).stdout
         self.assertIn("alt.md", out)
 
@@ -304,7 +333,7 @@ class HudCase(unittest.TestCase):
         con.execute("insert into sessions values ('20260101_000000_aaaaaa', '测试会话', 'default', 1760000000, 3, 0, 0)")
         con.commit()
         con.close()
-        env = dict(os.environ, HERMES_HOME=str(home))
+        env = self.base_env(HERMES_HOME=str(home))
         out = self.run_ctl("sessions", env=env).stdout
         self.assertIn("测试会话", out)
         self.run_ctl("use", "测试会话", "--ttl", "1h", env=env)
@@ -318,6 +347,84 @@ class HudCase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("快照正文", self.panel.read_text(encoding="utf-8"))
 
+    def test_snapshot_same_day_keeps_both(self):
+        snaps = self.dir / "snapshots"
+        self.write_panel(body="第一份")
+        r1 = self.run_ctl("snapshot")
+        self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+        self.write_panel(body="第二份")
+        r2 = self.run_ctl("snapshot")
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+        names = {p.name for p in snaps.glob("*.md")}
+        plain = [n for n in names if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", n)]
+        stamped = [n for n in names if re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{6}\.md", n)]
+        self.assertEqual(len(plain), 1, names)
+        self.assertEqual(len(stamped), 1, names)
+        self.assertIn("第一份", (snaps / plain[0]).read_text(encoding="utf-8"))
+        self.assertIn("第二份", (snaps / stamped[0]).read_text(encoding="utf-8"))
+
+    def test_snapshot_repeats_never_overwrite(self):
+        snaps = self.dir / "snapshots"
+        bodies = [f"第 {i} 份" for i in range(1, 6)]
+        for body in bodies:
+            self.write_panel(body=body)
+            r = self.run_ctl("snapshot")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        files = list(snaps.glob("*.md"))
+        self.assertEqual(len(files), len(bodies), [p.name for p in files])
+        text = "\n".join(p.read_text(encoding="utf-8") for p in files)
+        for body in bodies:
+            self.assertIn(body, text)
+        self.assertFalse(list(snaps.glob("*.tmp")), "原子写的临时文件没清干净")
+
+    def test_restore_latest_prefers_newest_same_day(self):
+        env = self.history_snaps()
+        self.write_panel(body="当前版本")
+        r = self.run_ctl("restore", "latest", "--ttl", "1h", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("晚上版本", self.panel.read_text(encoding="utf-8"))
+
+    def test_restore_date_picks_latest_of_that_day(self):
+        env = self.history_snaps()
+        self.write_panel(body="当前版本")
+        r = self.run_ctl("restore", "2026-10-24", "--ttl", "1h", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("晚上版本", self.panel.read_text(encoding="utf-8"))
+
+    def test_restore_date_works_with_plain_name_only(self):
+        env = self.history_snaps()
+        self.write_panel(body="当前版本")
+        r = self.run_ctl("restore", "2026-10-23", "--ttl", "1h", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("昨天版本", self.panel.read_text(encoding="utf-8"))
+
+    def test_restore_missing_date_is_rejected(self):
+        env = self.history_snaps()
+        r = self.run_ctl("restore", "2026-01-01", env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("没有这份快照", r.stdout + r.stderr)
+
+    def test_prune_keeps_newest_across_naming_schemes(self):
+        snaps = self.dir / "snaps"
+        for name in ("2026-10-22.md", "2026-10-23.md", "2026-10-24.md",
+                     "2026-10-24-083015.md", "2026-10-24-194500.md"):
+            self.write_snapshot(snaps, name, name)
+        env = self.base_env(HUD_SNAPS=str(snaps), HUD_PANEL=str(self.panel))
+        r = self.run_ctl("prune", "--keep", "2", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({p.name for p in snaps.glob("*.md")},
+                         {"2026-10-24-083015.md", "2026-10-24-194500.md"})
+
+    def test_prune_leaves_non_snapshot_md(self):
+        snaps = self.dir / "snaps"
+        self.write_snapshot(snaps, "2026-10-24-101010.md", "正经快照")
+        (snaps / "notes.md").write_text("随手记", encoding="utf-8")
+        env = self.base_env(HUD_SNAPS=str(snaps), HUD_PANEL=str(self.panel))
+        r = self.run_ctl("prune", "--keep", "1", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((snaps / "notes.md").exists())
+        self.assertTrue((snaps / "2026-10-24-101010.md").exists())
+
     # ---- hud_report ------------------------------------------------
     def test_report_counts(self):
         self.write_panel()
@@ -325,7 +432,7 @@ class HudCase(unittest.TestCase):
         self.inject(profile="default")
         self.write_panel(enabled="false")
         self.inject(profile="default")
-        env = dict(os.environ, HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
+        env = self.base_env(HUD_LOG=str(self.log), HUD_PANEL=str(self.panel))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 0)
@@ -333,14 +440,14 @@ class HudCase(unittest.TestCase):
         self.assertIn("inject", self.log.read_text(encoding="utf-8"))
 
     def test_report_bad_since(self):
-        env = dict(os.environ, HUD_LOG=str(self.log))
+        env = self.base_env(HUD_LOG=str(self.log))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py"), "--since", "10-22"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 2)
         self.assertIn("YYYY-MM-DD", r.stdout)
 
     def test_report_missing_log(self):
-        env = dict(os.environ, HUD_LOG=str(self.dir / "absent.log"))
+        env = self.base_env(HUD_LOG=str(self.dir / "absent.log"))
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 1)

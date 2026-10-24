@@ -8,8 +8,8 @@
     python hudctl.py check                   # 校验格式（缺元数据/到期写错/正文超长/已过期）
     python hudctl.py set --ttl 12h           # 换正文并续期（正文从 --body 文件或 stdin 读）
     python hudctl.py off / on                # 暂停 / 恢复注入（不删面板）
-    python hudctl.py snapshot                # 存一份当天的快照到 snapshots/
-    python hudctl.py restore latest --ttl 8h # 从快照恢复（只能人手动跑）
+    python hudctl.py snapshot                # 存一份快照（同日多份加时间戳，不互相覆盖）
+    python hudctl.py restore latest --ttl 8h # 从快照恢复（指定日期取当天最新；只能人手动跑）
     python hudctl.py prune --keep 14         # 只留最近 N 份快照
 
 设计边界：脚本不自动恢复、不自动续期——恢复必须是人手动执行（用户定的规矩）。
@@ -570,11 +570,63 @@ def cmd_toggle(flag: str):
     return run
 
 
+SNAP_NAME_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})(?:-(?P<clock>\d{6})(?:-(?P<seq>\d+))?)?\.md$"
+)
+
+
+def _snapshot_key(path: Path):
+    """快照文件名 → (年,月,日,时,分,秒,序号)；不是快照命名则返回 None。
+
+    `YYYY-MM-DD.md` 是当天第一份，按 00:00:00 计；同日后续快照是
+    `YYYY-MM-DD-HHMMSS.md`，同一秒里再撞名才加 `-N` 序号。
+    """
+    m = SNAP_NAME_RE.fullmatch(path.name)
+    if not m:
+        return None
+    try:
+        day = datetime.strptime(m.group("date"), "%Y-%m-%d")
+    except ValueError:
+        return None
+    clock = m.group("clock") or "000000"
+    hh, mm, ss = int(clock[:2]), int(clock[2:4]), int(clock[4:])
+    if hh > 23 or mm > 59 or ss > 59:
+        return None
+    return (day.year, day.month, day.day, hh, mm, ss, int(m.group("seq") or 0))
+
+
+def _snapshots() -> list[Path]:
+    """快照目录里的合法快照，按时间（取自文件名）从旧到新；杂项 .md 不算。"""
+    found = [(key, path.name, path) for path in SNAPS.glob("*.md")
+             if (key := _snapshot_key(path)) is not None]
+    return [path for _, _, path in sorted(found)]
+
+
+def _snapshot_target(now: datetime) -> Path:
+    """当天第一份用 `YYYY-MM-DD.md`；已存在就换 `YYYY-MM-DD-HHMMSS.md`，再撞名加序号。"""
+    plain = SNAPS / f"{now.strftime('%Y-%m-%d')}.md"
+    if not (plain.exists() or plain.is_symlink()):
+        return plain
+    stamp = now.strftime("%Y-%m-%d-%H%M%S")
+    candidate = SNAPS / f"{stamp}.md"
+    seq = 1
+    while candidate.exists() or candidate.is_symlink():
+        seq += 1
+        candidate = SNAPS / f"{stamp}-{seq}.md"
+    return candidate
+
+
 def cmd_snapshot(_args) -> int:
     SNAPS.mkdir(exist_ok=True)
     meta, body = read_panel()
-    target = SNAPS / f"{datetime.now(CST).strftime('%Y-%m-%d')}.md"
-    shutil.copy2(PANEL, target)
+    target = _snapshot_target(datetime.now(CST))
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    try:
+        shutil.copy2(PANEL, tmp)
+        os.replace(tmp, target)  # 原子落盘：不留半份快照，也不覆盖已有快照
+    finally:
+        if tmp.exists():
+            tmp.unlink()
     print(f"快照：{target}（{len(body)} 字）")
     return 0
 
@@ -583,15 +635,21 @@ def cmd_restore(args) -> int:
     SNAPS.mkdir(exist_ok=True)
     if args.date != "latest" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         raise SystemExit(f"日期格式应为 YYYY-MM-DD 或 latest：{args.date}")
-    snaps = sorted(p for p in SNAPS.glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", p.name))
+    snaps = _snapshots()
     if not snaps:
         raise SystemExit("没有快照可恢复")
     if args.date == "latest":
         target = snaps[-1]
     else:
-        target = SNAPS / f"{args.date}.md"
-        if not target.exists():
-            raise SystemExit(f"没有这份快照：{target}")
+        wanted = tuple(int(part) for part in args.date.split("-"))
+        same_day = []
+        for path in snaps:
+            key = _snapshot_key(path)
+            if key is not None and key[:3] == wanted:
+                same_day.append(path)
+        if not same_day:
+            raise SystemExit(f"没有这份快照：{args.date}（{SNAPS} 下没有该日快照）")
+        target = same_day[-1]  # 同日多份 → 取最新一份
     meta, body = split_panel(target.read_text(encoding="utf-8"))
     if args.session:
         meta["session_id"] = args.session
@@ -605,11 +663,14 @@ def cmd_restore(args) -> int:
 def cmd_prune(args) -> int:
     if args.keep < 1:
         raise SystemExit(f"--keep 必须 >= 1：{args.keep}")
-    snaps = sorted(SNAPS.glob("*.md"))
+    snaps = _snapshots()  # 新旧两种命名混排，按文件名里的时间从旧到新
     drop = snaps[: max(0, len(snaps) - args.keep)]
     for path in drop:
         path.unlink()
     print(f"保留 {min(args.keep, len(snaps))} 份，删除 {len(drop)} 份")
+    strays = sum(1 for _ in SNAPS.glob("*.md")) - len(snaps) if SNAPS.is_dir() else 0
+    if strays > 0:
+        print(f"（另有 {strays} 个非快照命名的 .md：不计入、未删除）")
     return 0
 
 
