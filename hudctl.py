@@ -17,12 +17,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+try:
+    import hud_panel  # 同目录；条目作用域解析
+except Exception:  # pragma: no cover
+    hud_panel = None
 
 ROOT = Path(__file__).resolve().parent
 PANEL = Path(os.environ.get("HUD_PANEL") or (ROOT / "panel.md"))
@@ -198,6 +205,156 @@ def cmd_sessions(args) -> int:
     return 0
 
 
+
+
+def _profile_cfg(profile: str) -> Path:
+    home = _hermes_home()
+    return home / "config.yaml" if profile == "default" else home / "profiles" / profile / "config.yaml"
+
+
+def _profile_allow(profile: str) -> Path:
+    home = _hermes_home()
+    return (home / "shell-hooks-allowlist.json" if profile == "default"
+            else home / "profiles" / profile / "shell-hooks-allowlist.json")
+
+
+def _hook_state(profile: str) -> tuple[bool, bool]:
+    """(config 里声明了 hud_inject, allowlist 里同意过)"""
+    try:
+        declared = "hud_inject" in _profile_cfg(profile).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        declared = False
+    try:
+        allowed = "hud_inject" in _profile_allow(profile).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        allowed = False
+    return declared, allowed
+
+
+def _all_sessions(db: Path) -> list[tuple[str, str, float]]:
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        try:
+            rows = con.execute(
+                "select id, title, last_activity_at from sessions "
+                "where coalesce(archived,0)=0 and coalesce(hidden,0)=0 and id not like 'cron_%' "
+                "order by last_activity_at desc").fetchall()
+        except sqlite3.Error:
+            rows = con.execute("select id, title, last_activity_at from sessions").fetchall()
+    finally:
+        con.close()
+    return [(sid, title or "", ts or 0) for sid, title, ts in rows]
+
+
+def cmd_impact(args) -> int:
+    """盘点全部对话：哪些会生效、哪些不会，以及原因。改面板前必须先跑这个。"""
+    meta, body = read_panel()
+    enabled = meta.get("enabled", "true").lower() not in {"false", "0", "no", "off"}
+    expires = parse_expiry(meta.get("expires_at", ""))
+    if expires and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=CST)
+    expired = bool(expires and expires <= datetime.now(CST))
+    panel_scope = (meta.get("session_id") or "any").strip()
+    dbs = _state_dbs()
+    if not dbs:
+        raise SystemExit(f"找不到任何会话库（HERMES_HOME={_hermes_home()}）")
+    profiles, sessions_out = [], []
+    for profile, db in dbs:
+        declared, allowed = _hook_state(profile)
+        try:
+            sess = _all_sessions(db)
+        except sqlite3.Error as exc:
+            profiles.append({"profile": profile, "sessions": 0, "declared": declared,
+                             "allowed": allowed, "effective": 0, "skipped": 0,
+                             "error": str(exc)})
+            continue
+        eff = skip = 0
+        for sid, title, ts in sess:
+            reason = ""
+            if not enabled:
+                reason = "面板已暂停"
+            elif expired:
+                reason = "面板已过期"
+            elif not declared:
+                reason = "该档没声明 pre_llm_call 钩子"
+            elif not allowed:
+                reason = "该档没同意该钩子命令"
+            elif panel_scope not in {"", "any", "*"} and panel_scope != sid:
+                reason = "面板只指向别的会话"
+            else:
+                kept, total = (1, 1)
+                if hud_panel is not None:
+                    _, kept, total = hud_panel.filter_body(body, sid, profile)
+                if kept == 0:
+                    reason = "所有条目都不作用于这条会话"
+            if reason:
+                skip += 1
+                sessions_out.append({"id": sid, "profile": profile, "title": title[:40],
+                                     "effective": False, "reason": reason})
+            else:
+                eff += 1
+                sessions_out.append({"id": sid, "profile": profile, "title": title[:40],
+                                     "effective": True, "reason": ""})
+        profiles.append({"profile": profile, "sessions": len(sess), "declared": declared,
+                         "allowed": allowed, "effective": eff, "skipped": skip})
+    total = sum(p["sessions"] for p in profiles)
+    total_eff = sum(p["effective"] for p in profiles)
+    payload = {
+        "panel": {"scope": panel_scope, "enabled": enabled, "expired": expired,
+                  "expires_at": meta.get("expires_at", ""),
+                  "entries": len(hud_panel.entries(body)) if hud_panel else 0},
+        "profiles": profiles, "sessions": sessions_out,
+        "totals": {"sessions": total, "effective": total_eff, "skipped": total - total_eff},
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    print(f"面板：范围={panel_scope} 状态={'暂停' if not enabled else '过期' if expired else '启用'} "
+          f"到期={meta.get('expires_at', '?')} 条目={payload['panel']['entries']}")
+    print(f"{'档':<14}{'会话':>5}  {'钩子':<4}{'同意':<4}{'生效':>5}{'不生效':>7}")
+    for p in profiles:
+        if p.get("error"):
+            print(f"{p['profile']:<14}{0:>5}  {'?' if not p['declared'] else '✓':<4}{'?' if not p['allowed'] else '✓':<4}  （读库失败：{p['error'][:30]}）")
+            continue
+        print(f"{p['profile']:<14}{p['sessions']:>5}  {'✓' if p['declared'] else '✗':<4}"
+              f"{'✓' if p['allowed'] else '✗':<4}{p['effective']:>5}{p['skipped']:>7}")
+    print(f"\n合计 {total} 条会话：生效 {total_eff}，不生效 {total - total_eff}")
+    if args.verbose:
+        print("\n逐条：")
+        for s in sessions_out:
+            mark = "生效" if s["effective"] else "不生效"
+            print(f"  [{mark}] {s['id']:<26} {s['profile']:<12} {s['title']}"
+                  + ("" if s["effective"] else f"  ← {s['reason']}"))
+    if panel_scope in {"", "any", "*"}:
+        print("默认范围=any：包含以后新建的会话。要限定范围，给条目加 [scope: session:<id>] 或用 use/ set --session。")
+    return 0
+
+
+def cmd_scope(args) -> int:
+    """改某一条的作用域：scope <条目号> all|session:id[,id]|profile:p[,p]|none"""
+    if hud_panel is None:
+        raise SystemExit("缺 hud_panel.py，无法解析条目")
+    meta, body = read_panel()
+    items = hud_panel.entries(body)
+    if not 1 <= args.entry <= len(items):
+        raise SystemExit(f"条目号超出范围：1..{len(items)}")
+    value = args.value.strip()
+    if value.lower() not in {"none", "all"}:
+        if hud_panel.parse_scope(value) is None:
+            raise SystemExit(f"作用域写法不认：{value}（all / session:id[,id] / profile:p[,p] / none）")
+    lines = body.splitlines()
+    item = items[args.entry - 1]
+    first = lines[item["start"]]
+    m = hud_panel.ENTRY_RE.match(first)
+    marker = m.group(0) if m else ""
+    rest = hud_panel.SCOPE_RE.sub("", first[len(marker):], count=1)
+    tag = "" if value.lower() == "none" else f"[scope: {value}] "
+    lines[item["start"]] = marker + tag + rest
+    write_panel(meta, "\n".join(lines))
+    print(f"第 {args.entry} 条作用域 → {value}")
+    return 0
+
+
 def cmd_use(args) -> int:
     """把面板指向另一个会话（按 id 或标题子串匹配）。"""
     import sqlite3
@@ -322,6 +479,8 @@ def cmd_check(_args) -> int:
             problems.append(f"面板已过期：{meta.get('expires_at')}（注入会被跳过）")
     if not body:
         problems.append("正文为空")
+    if hud_panel is not None:
+        problems.extend(hud_panel.validate(body))
     header = f"[HUD·{meta.get('title', '会话面板')}] 生效至 12-31 07:00（default）\n"
     if len(header) + len(body) > 1600:
         problems.append(f"注入块约 {len(header) + len(body)} 字（标题行+正文），超过 1600 上限（会被截断）")
@@ -394,6 +553,14 @@ def main() -> int:
     p_sessions = sub.add_parser("sessions")
     p_sessions.add_argument("--limit", type=int, default=15)
     p_sessions.set_defaults(func=cmd_sessions)
+    p_impact = sub.add_parser("impact")
+    p_impact.add_argument("--json", action="store_true")
+    p_impact.add_argument("--verbose", action="store_true")
+    p_impact.set_defaults(func=cmd_impact)
+    p_scope = sub.add_parser("scope")
+    p_scope.add_argument("entry", type=int)
+    p_scope.add_argument("value")
+    p_scope.set_defaults(func=cmd_scope)
     p_use = sub.add_parser("use")
     p_use.add_argument("target", help="会话 id 或标题里的关键字")
     p_use.add_argument("--ttl", default="12h")

@@ -98,6 +98,40 @@ enabled: true                                  # off 即暂停，不用删配置
 
 正文建议控制在 **1000 字以内**（脚本硬上限 1600 字，超出截断）。按 ¥2/百万 token 粗算，1000 字约 600–700 token ≈ **¥0.0012–0.0014/轮**；另外每轮多一次 Python 启动，视环境而定，本机常在 0.3–0.6s（慢盘/杀软下更久）。
 
+### 3.1 作用范围：默认全部（含以后新建的会话）
+
+**默认开关就是 `session_id: any`**：所有档、所有会话、以及以后新建的会话都生效。要收窄，有两条路：
+
+1. **整块面板**挂到某个会话：`session_id: <会话id>`（`hudctl.py use`）。此时**只**这一条会话生效。
+2. **按条目**限定（推荐，可混用）：在条目开头写作用域标注，注入时会自动删掉标注本身：
+
+```markdown
+9. [scope: all] 所有会话（含以后新建）          ← 不写也和这条一样
+10. [scope: session:20261024_120358_06278b] 只对这一条会话
+11. [scope: session:id1,id2] 对这两条会话
+12. [scope: profile:default,ceo] 只对 default 与 ceo 两个档
+```
+
+- 不带标注 = 跟随面板默认（`any` 时=全部）；
+- 会话 id 用 `hudctl.py sessions` 查；
+- 改写某条的作用域：`hudctl.py scope <条目号> all|session:id[,id]|profile:p[,p]|none`。
+
+### 3.2 增、删、改面板的流程（强制）
+
+收到「给面板加一条 / 删一条 / 改一条」时，**先盘点再动手**：
+
+```bash
+python hudctl.py impact            # 表格：每个档有多少会话、钩子/同意、生效/不生效
+python hudctl.py impact --verbose  # 再逐条列出每个会话生效与否及原因
+python hudctl.py impact --json     # 给程序/Agent 读
+```
+
+1. 跑 `impact`，把**哪些对话会生效、哪些不会、为什么**（面板暂停/过期、该档没声明钩子、没同意、范围不匹配、条目全被过滤）列给用户；
+2. **问一句 yes/no**；
+3. 用户回语义为 yes → 执行增删改，改完再跑一次 `impact` + `check` 复核；
+4. 用户回 no → 先问清楚具体要怎么改，不要猜着改；
+5. 新增条目默认写 `[scope: all]`（即作用于全部及未来新会话），只有用户点名才收窄到某个/某些会话。
+
 ---
 
 ## 四、日常操作（`hudctl.py`）
@@ -115,6 +149,8 @@ python hudctl.py restore latest --ttl 8h    # 从快照恢复（设计上只允�
 python hudctl.py prune --keep 14            # 只留最近 14 份快照
 python hudctl.py check                      # 校验面板格式（缺元数据/到期写错/正文超长）
 python hudctl.py sessions                   # 列出所有档最近的会话（default + profiles/* 的 state.db，只读）
+python hudctl.py impact [--verbose|--json]  # 盘点全部会话：哪些生效、哪些不生效、为什么
+python hudctl.py scope <条目号> all|session:id|profile:p|none   # 改单条作用域
 python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个会话
 ```
 
@@ -160,7 +196,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-40 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+44 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -184,12 +220,13 @@ python -m unittest discover -s tests -v
 | 文件 | 作用 |
 |---|---|
 | `hud_inject.py` | `pre_llm_call` 钩子本体：读面板 → 判会话/时效 → 输出 `{"context": …}` |
-| `hudctl.py` | 人来操作面板：status / set / off / on / snapshot / restore / sessions / use / prune |
+| `hudctl.py` | 人来操作面板：status / set / off / on / snapshot / restore / sessions / use / prune / impact / scope |
+| `hud_panel.py` | 条目作用域解析（`[scope: …]`）与正文过滤，inject/ctl 共用 |
 | `hud_report.py` | 读 `hud.log`，按档统计注入与跳过 |
 | `selfcheck.py` | Hermes 更新后的机制体检（6 项），写 `state/selfcheck.json` |
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
-| `tests/test_hud.py` | 40 个单元测试（标准库 unittest） |
+| `tests/` | 单元测试（标准库 unittest）：`test_hud.py` 主流程、`test_selfcheck.py` 机制自检、`test_scope.py` 作用域与 impact |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 

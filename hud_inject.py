@@ -20,6 +20,11 @@ import hashlib
 import json
 import os
 import sys
+
+try:
+    import hud_panel  # 同目录；条目作用域解析
+except Exception:  # pragma: no cover - 缺模块时退化为“不按条目过滤”
+    hud_panel = None
 from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -184,6 +189,12 @@ def main() -> int:
     if not body:
         log(f"skip empty-body session={session_id} profile={profile}")
         return 0
+    kept, total = 1, 1
+    if hud_panel is not None:
+        body, kept, total = hud_panel.filter_body(body, session_id, profile)
+        if kept == 0:
+            log(f"skip no-entry-for-session session={session_id} profile={profile} entries={total}")
+            return 0
     title = meta.get("title", "会话面板")
     stamp = expires.astimezone(CST).strftime("%m-%d %H:%M")
     who = profile or "default"
@@ -196,7 +207,7 @@ def main() -> int:
         block += "\n" + note
     if len(block) > MAX_CHARS:
         block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"
-    log(f"inject session={session_id} profile={profile} chars={len(block)}")
+    log(f"inject session={session_id} profile={profile} chars={len(block)} entries={kept}/{total}")
     print(json.dumps({"context": block}, ensure_ascii=True))
     return 0
 
