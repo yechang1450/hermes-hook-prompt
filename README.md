@@ -210,7 +210,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-76 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+77 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v

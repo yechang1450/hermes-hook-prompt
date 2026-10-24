@@ -165,8 +165,8 @@ def _state_dbs() -> list[tuple[str, Path]]:
     profiles = home / "profiles"
     if profiles.is_dir():
         for entry in sorted(profiles.iterdir()):
-            if not entry.is_dir() or entry.name == ".deleted":
-                continue
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue        # 与 _known_profiles 一致：点目录不是可选档（否则计入却无法按档筛选）
             db = entry / "state.db"
             if db.exists():
                 found.append((entry.name, db))

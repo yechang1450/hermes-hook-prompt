@@ -257,6 +257,34 @@ class RegCase(unittest.TestCase):
         self.assertIn("全量不完整", r.stdout)
 
 
+    # ---- 点目录不是可选档，也不该被计入全量 ----
+    def test_hidden_profile_dir_ignored(self):
+        self.panel_text("1. [scope: all] x")
+        (self.home / "config.yaml").write_text(
+            "hooks:\n  pre_llm_call:\n    - command: python hud_inject.py\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(json.dumps(
+            {"approvals": [{"event": "pre_llm_call", "command": "python hud_inject.py"}]}),
+            encoding="utf-8")
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('AAA','a',1,0,0,'chat')")
+        con.commit(); con.close()
+        hid = self.home / "profiles" / ".hidden"
+        hid.mkdir(parents=True)
+        (hid / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+        con = sqlite3.connect(hid / "state.db")
+        con.execute("create table sessions (id text, title text, last_activity_at real,"
+                    " archived int default 0, hidden int default 0, source text default 'chat')")
+        con.execute("insert into sessions values ('BBB','b',1,0,0,'chat')")
+        con.commit(); con.close()
+        r = self.ctl("impact", "--json", env_extra={"HERMES_HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["totals_all"]["sessions"], 1)
+        self.assertEqual([p["profile"] for p in data["profiles"]], ["default"])
+
+
 
 if __name__ == "__main__":
     unittest.main()
