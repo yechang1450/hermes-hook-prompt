@@ -23,15 +23,17 @@
 ## 文件安全
 
 - 面板是**符号链接 / Windows 重解析点**时，`hud_inject.py` 拒绝读取（日志记 `skip unsafe-panel`）——防止把 `~/.ssh/id_rsa` 之类的文件当面板送进模型；
-- 面板必须是普通文件，FIFO/设备文件一律拒绝；
-- `hudctl.py` 写面板用「同目录临时文件 + `os.replace`」原子替换，注入端不会读到空/半截内容；面板本身是符号链接时拒绝写入；
-- 读改写走**同一把文件锁**（`panel.md.lock`），并发的 `set/off/on/scope/use/restore` 不会互相覆盖丢更新；整份读取的绝对上限是 2 MB，超过 200 KB 时 `status`/`set` 只读头部（`set` 因此能整份覆盖被写坏的超大面板）、`check` 只报大小，不给自己留死角；
-- `restore` 覆盖前会先把当前面板存成 `snapshots/pre-restore-<时间戳>.md`；写不进快照就**拒绝恢复**；快照内容先按 `hudctl check` 的同一套规则校验，非法快照直接拒绝（exit 2），绝不把现网面板一起写坏；
+- 面板必须是普通文件，FIFO/设备文件一律拒绝；`hudctl.py` 的所有读路径（`status`/`check`/`impact`/`preview`/`snapshot`/`restore`…）同样先 `lstat`，软链/重解析点直接拒绝（exit 2），不跟随；
+- `hudctl.py` 写面板用「同目录临时文件 + `os.replace`」原子替换，临时文件名由 `tempfile.mkstemp`（`O_CREAT|O_EXCL`）随机生成——不再使用可预测的 `panel.md.<pid>.tmp`，预置软链无法被跟随写入；`selfcheck.py` 写 `state/selfcheck.json` 同理；
+- 读改写走**同一把文件锁**（`panel.md.lock`），并发的 `set/off/on/scope/use/restore` 不会互相覆盖丢更新；锁文件打开前 `lstat` 拒绝软链/重解析点，打开后 `fstat` 再验普通文件（POSIX 另加 `O_NOFOLLOW`）；整份读取的绝对上限是 2 MB，超过 200 KB 时 `status`/`set` 只读头部（`set` 因此能整份覆盖被写坏的超大面板）、`check` 只报大小，不给自己留死角；
+- `restore` 覆盖前会先把当前面板存成 `snapshots/pre-restore-<时间戳>.md`；写不进快照就**拒绝恢复**；快照内容先按 `hudctl check` 的同一套规则校验，非法快照直接拒绝（exit 2），绝不把现网面板一起写坏；快照本身是软链/重解析点时同样拒绝使用；
 - `prune` 默认只列清单，加 `--yes` 才删，且只删本工具命名的快照（手工 `.md` 一律不碰）。
 
 ## 日志
 
-`hud.log` 会记录 **会话 id** 与 **profile 名**（不含对话正文）。分享日志排障前先想一下这些标识是否敏感；脚本在日志超过 1 MB 时自动轮转到 `hud.log.1`。
+`hud.log` 会记录 **会话 id** 与 **profile 名**（不含对话正文）。默认记完整会话 id，方便和 `hudctl sessions` 对账；不想让日志里出现可读的会话标识时，给钩子进程设 `HUD_LOG_SESSIONS=0`，日志只记 `sha256(session_id)` 前 8 位（形如 `session=#a1b2c3d4`，仍能区分不同会话，但不能直接读出 id）。分享日志排障前先想一下这些标识是否敏感；脚本在日志超过 1 MB 时自动轮转到 `hud.log.1`。
+
+日志文件默认就在仓库目录里，继承该目录的 ACL。多用户机器上建议把仓库目录（含 `hud.log`）收紧到本人：Windows 用 `icacls <dir> /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`，POSIX 用 `chmod 700 <dir>` / `chmod 600 hud.log*`。
 
 ## 已知的非安全问题
 

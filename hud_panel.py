@@ -7,7 +7,7 @@
   2. 条目作用域（写在条目开头，注入时会从正文里删掉）：
 
         9. [scope: all] 所有会话（含以后新建）
-        10. [scope: session:20261024_120358_06278b] 只对这一条会话
+        10. [scope: session:20260101_000000_abcdef] 只对这一条会话
         11. [scope: session:id1,id2] 多条会话
         12. [scope: profile:default,ceo] 只对这几个档
         13. 不带标注 = 跟随面板 session_id（默认 all）

@@ -24,7 +24,9 @@ import os
 import re
 import shutil
 import sqlite3
+import stat as _stat
 import sys
+import tempfile
 import time
 from collections import Counter
 from contextlib import contextmanager
@@ -86,6 +88,82 @@ MAX_PANEL_BYTES = 200_000      # 软上限：超过它 status/check 只报，不
 MAX_PANEL_READ_BYTES = 2_000_000   # 硬上限：整份读写的绝对上限（再大就不能当面板读）
 HEAD_READ_BYTES = 64_000       # 「只读头部」的上限：元数据在前 24 行里，64KB 足够
 MAX_BODY_CHARS = 1600          # 与 hud_inject.MAX_CHARS 同值：正文超限直接拒绝写入
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400   # Windows：目录联接/符号链接等重解析点
+
+
+def _is_reparse_point(st) -> bool:
+    """Windows 重解析点（junction / symlink 等）；POSIX 上没有该属性，恒 False。"""
+    return bool(getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _unsafe_path(path: Path) -> str:
+    """路径是符号链接 / Windows 重解析点 / 非普通文件时返回原因，否则空串。
+
+    一律用 lstat：绝不跟随链接去判断「目标是不是普通文件」——那正是软链攻击的入口。
+    不存在返回空串（交给后续 open() 报缺文件）。
+    """
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        # 悬空软链在某些平台 lstat 会报缺文件；lexists 能认出「目录项在、目标不在」
+        return "是符号链接/重解析点（目标不可达）" if os.path.lexists(path) else ""
+    except OSError as exc:
+        return f"无法 lstat（{type(exc).__name__}）"
+    if _stat.S_ISLNK(st.st_mode) or _is_reparse_point(st):
+        return "是符号链接/重解析点"
+    if not _stat.S_ISREG(st.st_mode):
+        return "不是普通文件"
+    return ""
+
+
+def _is_regular_file(path: Path) -> bool:
+    """是普通文件、且不是符号链接/重解析点（快照过滤用）。"""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return _stat.S_ISREG(st.st_mode) and not _is_reparse_point(st)
+
+
+def _atomic_write_text(path: Path, data: str) -> Path:
+    """同目录临时文件 + os.replace 原子替换。
+
+    临时文件名由 `tempfile.mkstemp`（O_CREAT|O_EXCL）生成，**不会**落到可预测的
+    `panel.md.<pid>.tmp` 上：被人预算好名字放一个软链，旧写法会把数据写进受害文件。
+    """
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists() or tmp.is_symlink():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    return path
+
+
+ANSI_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"                 # CSI（颜色、光标移动…）
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"     # OSC（标题、超链接…）
+    r"|\x1b[@-Z\\-_]"                          # 双字符 ESC 序列
+    r"|\x1b"                                   # 落单的 ESC
+)
+C0_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _safe_text(value) -> str:
+    """终端输出前的清洗：先剥 ESC 序列（否则后面只剩 `[31m` 残字），再剥 C0 控制符。
+
+    会话标题来自 state.db（另一进程/另一档写入的数据），直接 print 等于让标题里的
+    ANSI 序列改终端颜色、清屏、伪造输出。换行也压成空格：一行一条记录不能被撑断。
+    """
+    text = ANSI_RE.sub("", "" if value is None else str(value))
+    text = C0_RE.sub("", text)
+    return re.sub(r"[\r\n\t]+", " ", text)
 
 
 def _panel_size() -> int:
@@ -142,6 +220,10 @@ def read_panel_ex(create: bool = True, head_only: bool = False) -> tuple[dict[st
     status/check/set 走这条——面板被写坏成几百 KB 时也能读出头部并整份覆盖，
     不会因为「读不了整份」而连自救的 set 都执行不了。
     """
+    unsafe = _unsafe_path(PANEL)
+    if unsafe:
+        # 管理端读路径同样不能跟随软链：status/impact/check 读到的可能是别人的私钥
+        raise SystemExit(f"面板{unsafe}，拒绝读取：{PANEL}（换成普通文件后再操作）")
     if not PANEL.exists() and not create:
         raise SystemExit(f"面板不存在：{PANEL}")
     if not PANEL.exists():
@@ -201,19 +283,42 @@ def render_panel(meta: dict[str, str], body: str) -> str:
 
 
 def write_panel(meta: dict[str, str], body: str) -> None:
-    if os.path.islink(PANEL):
-        raise SystemExit(f"面板是符号链接，拒绝写入：{PANEL}")
+    unsafe = _unsafe_path(PANEL)
+    if unsafe:
+        raise SystemExit(f"面板{unsafe}，拒绝写入：{PANEL}（软链/重解析点会把内容写进别人指定的文件）")
     data = render_panel(meta, body)
-    tmp = PANEL.with_name(f"{PANEL.name}.{os.getpid()}.tmp")
+    _atomic_write_text(PANEL, data)
+
+
+def _open_lock(lock_path: Path):
+    """打开面板锁：软链 / 重解析点 / 非普通文件一律拒绝。
+
+    三道检查：打开前 lstat（拒软链）、POSIX 上再加 O_NOFOLLOW、打开后 fstat 确认句柄
+    是普通文件并与路径 lstat 的 inode 对得上——防「检查之后被换成软链」的竞态。
+    旧写法 `open(path, "a+b")` 会老老实实跟随软链，把锁文件指向谁就锁谁、还能写。
+    """
+    unsafe = _unsafe_path(lock_path)
+    if unsafe:
+        raise OSError(f"面板锁{unsafe}")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
     try:
-        tmp.write_text(data, encoding="utf-8")
-        os.replace(tmp, PANEL)  # 原子替换：注入端不会读到空/半截文件
-    finally:
-        if tmp.exists():        # 写失败也别在目录里留半份临时文件
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode) or _is_reparse_point(st):
+            raise OSError("面板锁不是普通文件")
+        try:
+            lst = os.lstat(lock_path)
+        except OSError:
+            lst = None
+        if lst is not None:
+            if _stat.S_ISLNK(lst.st_mode) or _is_reparse_point(lst):
+                raise OSError("面板锁是符号链接/重解析点")
+            if lst.st_ino and st.st_ino and (lst.st_dev, lst.st_ino) != (st.st_dev, st.st_ino):
+                raise OSError("面板锁在打开过程中被替换了")
+        return os.fdopen(fd, "r+b")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 @contextmanager
@@ -227,7 +332,7 @@ def panel_lock(timeout: float = 10.0):
     fh = None
     try:
         try:
-            fh = open(lock_path, "a+b")
+            fh = _open_lock(lock_path)
         except OSError as exc:
             _die(f"打不开面板锁 {lock_path}（{type(exc).__name__}: {exc}）："
                  "它应该是普通文件；若是目录/别的文件，先把它移走再试")
@@ -334,7 +439,7 @@ def cmd_sessions(args) -> int:
     print(f"{'会话 id':<26} {'档':<12} {'消息':>4}  最后活动     标题")
     for sid, title, profile, ts, n in rows[: args.limit]:
         when = datetime.fromtimestamp(ts, CST).strftime("%m-%d %H:%M") if ts else "-"
-        print(f"{sid:<26} {profile:<12} {n or 0:>4}  {when}  {(title or '')[:28]}")
+        print(f"{_safe_text(sid):<26} {profile:<12} {n or 0:>4}  {when}  {_safe_text(title)[:28]}")
     return 0
 
 
@@ -699,7 +804,7 @@ def cmd_impact(args) -> int:
         print("\n逐条：")
         for s in sessions:
             mark = "生效" if s["effective"] else "不生效"
-            print(f"  [{mark}] {s['id']:<26} {s['profile']:<12} {s['title']}"
+            print(f"  [{mark}] {_safe_text(s['id']):<26} {s['profile']:<12} {_safe_text(s['title'])}"
                   + ("" if s["effective"] else f"  ← {s['reason']}"))
     if unknown:
         print(f"\n⚠ 头部有未知键：{', '.join(unknown)}（注入端会整块跳过；改掉或删掉这些行）")
@@ -786,9 +891,9 @@ def cmd_preview(args) -> int:
         print(f"  - {_brief(text)}")
     if args.verbose:
         for s in gained:
-            print(f"  [+生效] {s['id']:<26} {s['profile']:<12} {s['title']}")
+            print(f"  [+生效] {_safe_text(s['id']):<26} {s['profile']:<12} {_safe_text(s['title'])}")
         for s in lost:
-            print(f"  [-生效] {s['id']:<26} {s['profile']:<12} {s['title']}  ← {s['reason']}")
+            print(f"  [-生效] {_safe_text(s['id']):<26} {s['profile']:<12} {_safe_text(s['title'])}  ← {s['reason']}")
     print(f"\n确认后执行：python hudctl.py set --body \"{target}\"")
     return 0
 
@@ -860,7 +965,8 @@ def cmd_use(args) -> int:
     if not hits:
         raise SystemExit(f"没找到会话：{target}（先跑 `python hudctl.py sessions`）")
     if len(hits) > 1:
-        listing = "\n".join(f"  {sid}  [{prof}] {title}" for sid, title, prof in hits[:8])
+        listing = "\n".join(f"  {_safe_text(sid)}  [{prof}] {_safe_text(title)}"
+                            for sid, title, prof in hits[:8])
         raise SystemExit(f"匹配到多个会话，请给完整 id：\n{listing}")
     sid, title, _prof = hits[0]
     with panel_lock():
@@ -869,7 +975,7 @@ def cmd_use(args) -> int:
         meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
         meta["enabled"] = "true"
         write_panel(meta, body)
-    print(f"已挂到：{sid}（{title}） 到期 {meta['expires_at']}")
+    print(f"已挂到：{_safe_text(sid)}（{_safe_text(title)}） 到期 {meta['expires_at']}")
     return 0
 
 
@@ -1078,6 +1184,10 @@ def cmd_check(args) -> int:
     if not PANEL.exists():
         print(f"✗ 面板不存在：{PANEL}")
         return 1
+    unsafe = _unsafe_path(PANEL)
+    if unsafe:
+        print(f"✗ 面板{unsafe}，拒绝读取：{PANEL}（检查/修复前先换成普通文件）")
+        return 1
     size = _panel_size()
     if size > MAX_PANEL_BYTES:
         print(f"✗ 面板过大（{size} 字节 > {MAX_PANEL_BYTES}）：{PANEL}"
@@ -1183,20 +1293,23 @@ def _ensure_snaps() -> None:
 
 
 def _snapshots() -> list[Path]:
-    """快照目录里的合法快照，按时间（取自文件名）从旧到新；杂项 .md / 同名目录都不算。"""
+    """快照目录里的合法快照，按时间（取自文件名）从旧到新；杂项 .md / 同名目录 / 软链都不算。"""
     found = [(key, path.name, path) for path in SNAPS.glob("*.md")
-             if path.is_file() and (key := _snapshot_key(path)) is not None]
+             if _is_regular_file(path) and (key := _snapshot_key(path)) is not None]
     return [path for _, _, path in sorted(found)]
 
 
 def _snapshot_named(name: str) -> Path:
-    """--file / 位置参数里的快照文件名：只认基名，不许带路径，必须是普通文件。"""
+    """--file / 位置参数里的快照文件名：只认基名，不许带路径，必须是普通文件（非软链）。"""
     clean = (name or "").strip()
     if not clean:
         raise SystemExit("快照文件名不能为空：给 snapshots/ 下的名字（如 pre-restore-2026-10-22-120000.md）")
     if Path(clean).name != clean:
         raise SystemExit(f"--file 只认文件名，不能带路径：{clean}")
     target = SNAPS / clean
+    unsafe = _unsafe_path(target)
+    if unsafe:
+        raise SystemExit(f"快照{unsafe}，拒绝使用：{target}（还原前先换成普通文件）")
     if not target.is_file():
         raise SystemExit(f"快照不存在：{target}")
     return target
@@ -1217,13 +1330,25 @@ def _snapshot_target(now: datetime) -> Path:
 
 
 def _snapshot_to(target: Path) -> Path:
-    """原子地把当前面板复制成 target；失败时抛 OSError 并清掉临时文件。"""
-    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    """原子地把当前面板复制成 target；失败时抛 OSError 并清掉临时文件。
+
+    临时文件用 mkstemp（O_EXCL，名字不可预算）+ 写入前 lstat 拒绝软链目标：
+    软链面板不拍（会把链接指向的文件内容当面板存下来），软链目标不覆盖。
+    """
+    unsafe_panel = _unsafe_path(PANEL)
+    if unsafe_panel:
+        raise OSError(f"面板{unsafe_panel}，拒绝快照")
+    unsafe_target = _unsafe_path(target)
+    if unsafe_target:
+        raise OSError(f"目标快照{unsafe_target}，拒绝覆盖")
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.", suffix=".tmp", dir=str(target.parent))
+    os.close(fd)
+    tmp = Path(tmp_name)
     try:
         shutil.copy2(PANEL, tmp)
         os.replace(tmp, target)  # 原子落盘：不留半份快照，也不覆盖已有快照
     finally:
-        if tmp.exists():
+        if tmp.exists() or tmp.is_symlink():
             try:
                 tmp.unlink()
             except OSError:
@@ -1249,6 +1374,9 @@ def _pre_restore_target(now: datetime) -> Path:
 def cmd_snapshot(_args) -> int:
     _ensure_snaps()
     with panel_lock():          # 持锁复制：并发 set 不能让我们拍到半份/新旧交界的文件
+        unsafe = _unsafe_path(PANEL)
+        if unsafe:
+            _die(f"面板{unsafe}，拒绝快照：{PANEL}（快照只拍普通文件）")
         if not PANEL.exists():
             read_panel(create=True)     # 保持旧行为：面板不存在时先从 panel.example.md 复制
         size = _panel_size()
@@ -1298,6 +1426,9 @@ def _resolve_restore_target(args) -> Path:
 def cmd_restore(args) -> int:
     _ensure_snaps()
     target = _resolve_restore_target(args)
+    unsafe = _unsafe_path(target)          # 解析与实际读取之间再过一遍（解析可能来自 latest）
+    if unsafe:
+        _die(f"快照{unsafe}，拒绝恢复：{target}")
     try:
         text = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:

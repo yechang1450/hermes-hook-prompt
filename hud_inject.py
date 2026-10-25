@@ -20,8 +20,10 @@ fail-closed（宁可整块不注入，也不注入半成品/元数据）：
     正文写了 [scope:] 却没有可识别条目、缺 hud_panel.py：跳过并 log
 
 退出码永远 0：钩子坏了不该拦住正常对话（fail-open）。
-环境变量：HUD_PANEL / HUD_LOG / HUD_STATE 可覆盖默认路径。
+环境变量：HUD_PANEL / HUD_LOG / HUD_STATE 可覆盖默认路径；
+HUD_LOG_SESSIONS=0 时日志里的会话 id 只记 sha256 前 8 位（默认记完整 id）。
 """
+import hashlib
 import json
 import os
 import sys
@@ -37,6 +39,9 @@ except Exception:  # pragma: no cover - 缺模块时整块跳过（fail-closed�
 
 PANEL = os.environ.get("HUD_PANEL", os.path.join(ROOT, "panel.md"))
 LOG = os.environ.get("HUD_LOG", os.path.join(ROOT, "hud.log"))
+# 日志默认记完整会话 id（排障要对上号）；HUD_LOG_SESSIONS=0 时只记 sha256 前 8 位。
+LOG_SESSIONS = (os.environ.get("HUD_LOG_SESSIONS") or "1").strip().lower() not in {
+    "0", "false", "no", "off"}
 CST = timezone(timedelta(hours=8))
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -101,6 +106,17 @@ def _selfcheck_note() -> str:
     if state.get("fingerprint") != current:
         return "⚠ Hermes 已更新、机制未复检：先跑 python selfcheck.py，失败则按提示适配新版"
     return ""
+
+
+def _log_sid(session_id: str) -> str:
+    """日志里的会话标识：默认原样；HUD_LOG_SESSIONS=0 时用 sha256 前 8 位（`#abcdef12`）。
+
+    日志会被复制到 issue / 排障记录里。哈希前缀仍能把同一会话的若干行串起来，
+    但拿不回原 id（会话 id 里带时间戳，可猜空间很小，这里只求「不可直接读出」）。
+    """
+    if LOG_SESSIONS:
+        return session_id
+    return "#" + hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:8]
 
 
 def log(line: str) -> None:
@@ -186,15 +202,15 @@ def main() -> int:
         log(f"skip no-session profile={profile}")
         return 0
     if hud_panel is None:
-        log(f"skip degenerate-panel reason=no-hud-panel session={session_id} profile={profile}")
+        log(f"skip degenerate-panel reason=no-hud-panel session={_log_sid(session_id)} profile={profile}")
         return 0
     unsafe = _reject_unsafe(PANEL)
     if unsafe:
-        log(f"skip unsafe-panel reason={unsafe} session={session_id}")
+        log(f"skip unsafe-panel reason={unsafe} session={_log_sid(session_id)}")
         return 0
     try:
         if os.path.getsize(PANEL) > MAX_PANEL_BYTES:
-            log(f"skip oversized-panel session={session_id} profile={profile}")
+            log(f"skip oversized-panel session={_log_sid(session_id)} profile={profile}")
             return 0
     except OSError:
         pass
@@ -202,31 +218,31 @@ def main() -> int:
         with open(PANEL, encoding="utf-8") as fh:
             text = fh.read(MAX_PANEL_BYTES)
     except FileNotFoundError:
-        log(f"skip no-panel session={session_id} profile={profile}")
+        log(f"skip no-panel session={_log_sid(session_id)} profile={profile}")
         return 0
     except (OSError, UnicodeDecodeError) as exc:
-        log(f"skip unreadable-panel session={session_id} profile={profile} err={type(exc).__name__}")
+        log(f"skip unreadable-panel session={_log_sid(session_id)} profile={profile} err={type(exc).__name__}")
         return 0
     text = text.lstrip("\ufeff")
     meta, body, unknown = hud_panel.split_meta(text)
     if unknown:
         # 头部有不认识的键：不把元数据当正文注入，整块跳过（hudctl check 会报错提示）
-        log(f"skip unknown-meta keys={','.join(unknown)} session={session_id} profile={profile}")
+        log(f"skip unknown-meta keys={','.join(unknown)} session={_log_sid(session_id)} profile={profile}")
         return 0
     enabled = hud_panel.parse_enabled(meta.get("enabled", "true"))
     if enabled is None:
         # 非法值不得 fail-open：不认识就当没开，绝不照样注入（check 会报错）
-        log(f"skip bad-enabled value={meta.get('enabled')!r} session={session_id} profile={profile}")
+        log(f"skip bad-enabled value={meta.get('enabled')!r} session={_log_sid(session_id)} profile={profile}")
         return 0
     if not enabled:
-        log(f"skip disabled session={session_id} profile={profile}")
+        log(f"skip disabled session={_log_sid(session_id)} profile={profile}")
         return 0
     scope = (meta.get("session_id") or "").strip()
     if not scope:
-        log(f"skip empty-scope session={session_id} profile={profile}")
+        log(f"skip empty-scope session={_log_sid(session_id)} profile={profile}")
         return 0
     if scope.lower() not in {"any", "*"} and scope != session_id:
-        log(f"skip other-session scope={scope} session={session_id} profile={profile}")
+        log(f"skip other-session scope={_log_sid(scope)} session={_log_sid(session_id)} profile={profile}")
         return 0
     try:
         raw = (meta.get("expires_at") or "").strip()
@@ -234,30 +250,30 @@ def main() -> int:
             raw = raw[:-1] + "+00:00"
         expires = datetime.fromisoformat(raw)
     except Exception:
-        log(f"skip bad-expiry meta={meta.get('expires_at')!r} session={session_id} profile={profile}")
+        log(f"skip bad-expiry meta={meta.get('expires_at')!r} session={_log_sid(session_id)} profile={profile}")
         return 0
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     now = datetime.now(CST)
     if now >= expires:
-        log(f"skip expired at {expires.isoformat()} session={session_id} profile={profile}")
+        log(f"skip expired at {expires.isoformat()} session={_log_sid(session_id)} profile={profile}")
         return 0
     if not body:
-        log(f"skip empty-body session={session_id} profile={profile}")
+        log(f"skip empty-body session={_log_sid(session_id)} profile={profile}")
         return 0
     degenerate = hud_panel.degenerate_reason(body)
     if degenerate:
         # 代码围栏没闭合 → 条目边界不可信，注解可能原样漏进上下文；整块跳过
-        log(f"skip degenerate-panel reason={degenerate} session={session_id} profile={profile}")
+        log(f"skip degenerate-panel reason={degenerate} session={_log_sid(session_id)} profile={profile}")
         return 0
     if not hud_panel.entries(body) and hud_panel.INLINE_SCOPE_RE.search(body):
         # 有 [scope: …] 却解析不出任何条目（比如整块写成缩进段落）：不原样广播带标签的正文
-        log(f"skip degenerate-panel reason=scope-without-entry session={session_id} profile={profile}")
+        log(f"skip degenerate-panel reason=scope-without-entry session={_log_sid(session_id)} profile={profile}")
         return 0
     bad_scopes = len(hud_panel.invalid_scopes(body))
     body, kept, total = hud_panel.filter_body(body, session_id, profile)
     if kept == 0:
-        log(f"skip no-entry-for-session session={session_id} profile={profile} "
+        log(f"skip no-entry-for-session session={_log_sid(session_id)} profile={profile} "
             f"entries={total} invalid_scope={bad_scopes}")
         return 0
     title = meta.get("title", "会话面板")
@@ -272,7 +288,7 @@ def main() -> int:
         block += "\n" + note
     if len(block) > MAX_CHARS:
         block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"
-    log(f"inject session={session_id} profile={profile} chars={len(block)} "
+    log(f"inject session={_log_sid(session_id)} profile={profile} chars={len(block)} "
         f"entries={kept}/{total}" + (f" invalid_scope={bad_scopes}" if bad_scopes else ""))
     print(json.dumps({"context": block}, ensure_ascii=True))
     return 0

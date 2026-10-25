@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat as _stat
 import subprocess
 import sys
 import tempfile
@@ -216,14 +217,33 @@ def check() -> tuple[list[dict], bool, list[str]]:
 
 
 def _write_state(payload: dict) -> None:
-    """原子写：同目录临时文件 + os.replace；失败时清掉临时文件。"""
+    """原子写：mkstemp 临时文件（O_EXCL，名字不可预算）+ os.replace。
+
+    旧写法用 `state/selfcheck.json.<pid>.tmp`，名字可预测：事先在同目录放一个同名软链，
+    写临时文件那一步就会顺着链接把内容写进受害文件。mkstemp 的随机名字杜绝这一点，
+    预置的软链既不会被选中也不会被跟随。
+    """
     data = json.dumps(payload, ensure_ascii=False, indent=2)
-    tmp = STATE_FILE.with_name(f"{STATE_FILE.name}.{os.getpid()}.tmp")
     try:
-        tmp.write_text(data, encoding="utf-8")
+        st = os.lstat(STATE_FILE)
+    except FileNotFoundError:
+        st = None
+    except OSError as exc:
+        raise OSError(f"无法 lstat {STATE_FILE}（{type(exc).__name__}）") from exc
+    if st is not None:
+        if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
+            raise OSError(f"自检状态文件是符号链接/重解析点，拒绝写入：{STATE_FILE}")
+        if not _stat.S_ISREG(st.st_mode):
+            raise OSError(f"自检状态路径不是普通文件：{STATE_FILE}")
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{STATE_FILE.name}.", suffix=".tmp",
+                                    dir=str(STATE_FILE.parent))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
         os.replace(tmp, STATE_FILE)
     finally:
-        if tmp.exists():
+        if tmp.exists() or tmp.is_symlink():
             try:
                 tmp.unlink()
             except OSError:
