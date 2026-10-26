@@ -4,6 +4,12 @@
 
 ```
 ## 硬约束
-1. [scope: all] 积极使用 Hermes 官方提供的子代理机制，以便于自动继续。
-2. [scope: all] 如需要网页搜索与网页抓取，建议使用 DeepSeek 官方提供的 Search / Fetch API，遵循 DeepSeek 的官方逻辑，不允许影响大模型的 API 服务。
+1. [scope: all] 凡可拆分、可并行的耗时任务，在适用前提下优先用 Hermes 官方子代理机制（delegate_task）派发，让本 session 自动继续；单次即时命令与需我当场看屏/交互的操作直接做。
+2. [scope: all] 需要网页搜索/抓取时，优先用 DeepSeek 官方 Search / Fetch API（/v1/tools/search、/v1/tools/fetch），按其官方文档调用；不占用、不影响大模型对话 API。
+
+## 红线（动手前需明确授权）
+- 不重启/停止 Hermes、网关或桌面后端；不升级/降级。
+- 不改 SOUL、记忆、凭据、config；不删数据。
+- 不改写已推历史（含 force push）；不对外发布、不公开仓库、不花钱。
+- 不碰别的对话的资产、进程与在跑任务。
 ```
