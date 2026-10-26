@@ -101,12 +101,17 @@ def _unsafe_path(path: Path) -> str:
 
     一律用 lstat：绝不跟随链接去判断「目标是不是普通文件」——那正是软链攻击的入口。
     不存在返回空串（交给后续 open() 报缺文件）。
+
+    `lstat` 报 `FileNotFoundError` 时**直接返回空串**，不要用 `os.path.lexists` 去判
+    「悬空软链」：并发进程完全可能在两次调用之间创建同一个普通锁文件，`lexists` 为真
+    就会被误判成重解析点（CI windows/3.12 的并发 scope 用例即此竞态）。「是否存在 /
+    是否普通文件」交给后续 `open()`/`fstat()` 判定；真正的软链由 `lstat` 成功时的
+    `S_ISLNK` 分支和 `fstat` 兜住。
     """
     try:
         st = os.lstat(path)
     except FileNotFoundError:
-        # 悬空软链在某些平台 lstat 会报缺文件；lexists 能认出「目录项在、目标不在」
-        return "是符号链接/重解析点（目标不可达）" if os.path.lexists(path) else ""
+        return ""
     except OSError as exc:
         return f"无法 lstat（{type(exc).__name__}）"
     if _stat.S_ISLNK(st.st_mode) or _is_reparse_point(st):

@@ -212,7 +212,7 @@ class SelfcheckProfileCase(Base):
 # --------------------------------------------------------------------------- #
 class EstimateCase(Base):
     def test_1403_body_with_28char_session_can_be_saved(self):
-        sid = "20261025_120358_06278b3c9d1f"
+        sid = "20260101_000000_abcdef123456"
         self.assertEqual(len(sid), 28)
         self.panel_text()
         body = self.dir / "body.md"

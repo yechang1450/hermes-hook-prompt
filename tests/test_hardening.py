@@ -475,6 +475,33 @@ class PanelIOHardeningCase(Base):
         for i in range(1, 7):
             self.assertIn(f"[scope: profile:p{i}]", text)
 
+    def test_concurrent_scope_updates_under_double_contention(self):
+        """12 个进程抢同一把**新建**锁，终态仍必须 6 条齐全。
+
+        每条条目安排两个写者、但写同一个值，所以终态与调度顺序无关，断言不必放松。
+        新增这条是为了覆盖「锁文件刚被并发创建」的窗口：旧 `_unsafe_path()` 在这里
+        会把刚建出来的普通锁文件误判成重解析点（CI windows/3.12 的失败形态）。
+        """
+        self.panel_text("\n".join(f"{i}. 条目{i}" for i in range(1, 7)))
+        procs = []
+        for n in range(12):
+            entry = n % 6 + 1
+            procs.append(subprocess.Popen(
+                [PY, str(self.dir / "hudctl.py"), "scope", str(entry), f"profile:p{entry}"],
+                env=self.env(), cwd=str(self.dir),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace"))
+        for proc in procs:
+            out, err = proc.communicate(timeout=180)
+            self.assertEqual(proc.returncode, 0, out + err)
+        text = self.panel.read_text(encoding="utf-8")
+        for i in range(1, 7):
+            self.assertIn(f"[scope: profile:p{i}]", text)
+        self.assertEqual(list(self.dir.glob("panel.md.*.tmp")), [])
+        lock = self.dir / "panel.md.lock"
+        self.assertTrue(lock.is_file())
+        self.assertFalse(lock.is_symlink())
+
 
 # --------------------------------------------------------------------------- #
 # 13) parse_scope 半个 token / use 精确匹配不限 300 条

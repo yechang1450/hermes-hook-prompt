@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 PY = sys.executable
@@ -158,6 +159,35 @@ class TempAndLockSymlinkCase(Base):
         mod._write_state({"status": "ok", "ok": True})
         self.assertEqual(victim.read_text(encoding="utf-8"), "VICTIM-STATE")
         self.assertIn('"status": "ok"', (self.state / "selfcheck.json").read_text(encoding="utf-8"))
+
+
+class LockCreateRaceCase(Base):
+    """W4：`lstat` 报缺文件时不得用 `lexists` 判「悬空软链」。
+
+    并发建锁时目录项可能刚被别的进程建出来：`lstat` 已抛 FileNotFoundError，再问
+    `lexists` 会得到 True，旧实现据此把普通锁文件误判成重解析点（CI windows/3.12 的
+    `test_concurrent_scope_updates_are_not_lost` 即此竞态）。这里把两个系统调用都钉死，
+    不依赖调度时序。
+    """
+
+    def test_filenotfound_from_lstat_is_not_treated_as_dangling_symlink(self):
+        mod = self.load_module("hudctl")
+        target = self.dir / "panel.md.lock"
+        missing = FileNotFoundError(2, "No such file or directory", str(target))
+        with mock.patch.object(mod.os, "lstat", side_effect=missing), \
+                mock.patch.object(mod.os.path, "lexists", return_value=True) as lexists:
+            self.assertEqual(mod._unsafe_path(target), "")
+        # 不看 lexists：否则「刚被别人建出来的普通文件」会被算成悬空软链
+        lexists.assert_not_called()
+
+    def test_lock_on_fresh_path_opens_and_is_regular_file(self):
+        mod = self.load_module("hudctl")
+        lock = self.dir / "panel.md.lock"
+        self.assertFalse(lock.exists())
+        with mod.panel_lock(timeout=5):
+            pass
+        self.assertTrue(lock.is_file())
+        self.assertFalse(lock.is_symlink())
 
 
 class PanelReadSymlinkCase(Base):
