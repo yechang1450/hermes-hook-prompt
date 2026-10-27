@@ -238,7 +238,7 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
     head = unicodedata.normalize("NFKC", original[:64])
     opener = head[:1]
-    if opener and unicodedata.category(opener).startswith("P") and opener not in "-–—":
+    if opener and not opener.isalnum() and not opener.isspace() and opener not in "-–—":
         if (":" in head or "：" in head) and not re.match(r"^\[\s*scope\b", head, re.IGNORECASE):
             token = head[1:].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
             return (token or "?", False)
@@ -386,6 +386,20 @@ def has_scope_like(body: str) -> bool:
     return bool(re.search(r"scop\w*\s*[:：]", scan, re.IGNORECASE))
 
 
+def has_label_like(body: str) -> bool:
+    """行首任意非字母数字 + 前 64 字内有冒号：按标签行处理（含符号类前缀）。"""
+    for line in normalize_newlines(body).splitlines():
+        stripped = line.lstrip()
+        if not stripped or stripped[0].isalnum() or stripped[0].isspace():
+            continue
+        if stripped[0] in "-–—":
+            continue
+        head = unicodedata.normalize("NFKC", stripped[:64])
+        if ":" in head or "：" in head:
+            return True
+    return False
+
+
 def filter_body(body: str, session_id: str, profile: str,
                 default_scope=None) -> tuple[str, int, int]:
     """按作用域过滤正文，并删掉 [scope: …] 标注。返回 (新正文, 保留条数, 总条数)。
@@ -396,10 +410,17 @@ def filter_body(body: str, session_id: str, profile: str,
     lines = normalize_newlines(body).splitlines()
     items = entries(body)
     if not items:
-        if INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body) or has_scope_like(body):
+        if (INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body)
+                or has_scope_like(body) or has_label_like(body)):
             return "", 0, 0
         return body, 1, 1
-    out: list[str] = lines[: items[0]["start"]]  # 保留第一个条目之前的标题/前言
+    preamble = []
+    for line in lines[: items[0]["start"]]:
+        if _loose_scope_at(line) is not None or has_scope_like(line) or has_label_like(line):
+            # 前言里写标注/标签：该行不能原样广播（否则“只给 ceo”会进所有人上下文）。
+            continue
+        preamble.append(line)
+    out: list[str] = preamble  # 保留第一个条目之前的标题/前言
     kept = 0
     for item in items:
         if item["scope_token"] is not None or item.get("malformed_scope"):
@@ -488,7 +509,7 @@ def validate(body: str) -> list[str]:
         for token in item.get("invalid_continuation") or []:
             warns.append(f"[scope: {token}] 续行标注非法（只认 all / session:id / profile:name）："
                          "整条不注入（fail-closed）")
-    if not items and (INLINE_SCOPE_RE.search(body) or has_scope_like(body)):
+    if not items and (INLINE_SCOPE_RE.search(body) or has_scope_like(body) or has_label_like(body)):
         warns.append("正文里写了 [scope: …] 却没有任何可识别条目：注入会整块跳过"
                      "（条目必须以 1. / 1) / - / * 顶格开头）")
     lines = normalize_newlines(body).splitlines()

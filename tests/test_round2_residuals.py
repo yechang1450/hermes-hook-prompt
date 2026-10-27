@@ -400,6 +400,22 @@ class HookParserCase(Base):
             self.assertIsNone(item["scope"], (body, item))
             self.assertTrue(item["malformed_scope"], (body, item))
 
+    def test_preamble_scope_line_is_not_broadcast(self):
+        body = "[scope: profile:ceo] SECRET-PREAMBLE\n1. 公共\n"
+        text, kept, total = self.hp.filter_body(body, "S-BUILD", "build")
+        self.assertNotIn("SECRET-PREAMBLE", text)
+        self.assertEqual(kept, 1, (text, kept, total))
+
+    def test_symbol_prefix_and_confusable_scope_labels(self):
+        for body in (
+            "1. <备注：只给 ceo> 机密XYZ\n",
+            "1. [sϲope: profile:ceo] 机密XYZ\n",
+            "1. (备注：只给 ceo) 机密XYZ\n",
+        ):
+            item = self.hp.entries(body)[0]
+            self.assertIsNone(item["scope"], (body, item))
+            self.assertTrue(item["malformed_scope"], (body, item))
+
     def test_zero_entry_bare_scope_is_not_broadcast(self):
         for body in (
             "scope: profile:ceo 机密XYZ",
