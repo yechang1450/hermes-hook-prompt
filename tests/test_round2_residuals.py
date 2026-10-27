@@ -367,6 +367,16 @@ class HookParserCase(Base):
         self.assertEqual(item["scope"], ("all", set()), item)
         self.assertFalse(item["malformed_scope"], item)
 
+    def test_valid_ascii_tag_with_fullwidth_brackets_in_body(self):
+        item = self.hp.entries("1. [scope: all] 见［附件］\n")[0]
+        self.assertEqual(item["scope"], ("all", set()), item)
+        self.assertFalse(item["malformed_scope"], item)
+
+    def test_fullwidth_closing_bracket_is_not_a_valid_tag(self):
+        item = self.hp.entries("1. [scope: all］ 说明\n")[0]
+        self.assertIsNone(item["scope"], item)
+        self.assertTrue(item["malformed_scope"], item)
+
     def test_malformed_continuation_drops_the_whole_entry(self):
         body = "1. 公共\n   [ scope: profile:ceo] 只给 ceo\n"
         text, kept, total = self.hp.filter_body(body, "AAA", "build")

@@ -222,9 +222,9 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     body = m.group(1)
     token = body.split("]", 1)[0].strip()
     # 只看标注本身，不看整行：正文里的中文冒号不是 scope 写法错误。
-    tag = stripped.split("]", 1)[0]
-    if "］" in stripped:
-        tag = stripped.split("］", 1)[0]
+    # 起始括号决定配对的闭合括号：ASCII 标签后面出现 `［附件］` 不能截错。
+    close = "］" if stripped.startswith("［") else "]"
+    tag = stripped.split(close, 1)[0]
     exact = (
         bool(SCOPE_RE.match(normalized))
         and not any(ch in tag for ch in ("［", "］", "："))
@@ -416,9 +416,13 @@ def entry_scopes(body: str) -> list[tuple[str, str | None]]:
 
 
 def invalid_scopes(body: str) -> list[str]:
-    """返回非法标注列表（写了但解析不了，或同一 entry 写了两处）。"""
-    return [item["scope_token"] for item in entries(body)
-            if item["scope_token"] is not None and item["scope"] is None]
+    """返回非法标注列表（写了但解析不了、同一 entry 写了两处，或续行写坏）。"""
+    out: list[str] = []
+    for item in entries(body):
+        if item["scope_token"] is not None and item["scope"] is None:
+            out.append(item["scope_token"])
+        out.extend(item.get("invalid_continuation") or [])
+    return out
 
 
 def validate(body: str) -> list[str]:
@@ -438,7 +442,7 @@ def validate(body: str) -> list[str]:
     for item in items:
         for token in item.get("invalid_continuation") or []:
             warns.append(f"[scope: {token}] 续行标注非法（只认 all / session:id / profile:name）："
-                         "已按普通文本保留，不生效也不删除")
+                         "整条不注入（fail-closed）")
     if not items and INLINE_SCOPE_RE.search(body):
         warns.append("正文里写了 [scope: …] 却没有任何可识别条目：注入会整块跳过"
                      "（条目必须以 1. / 1) / - / * 顶格开头）")
