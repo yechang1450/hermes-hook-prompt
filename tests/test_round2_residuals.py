@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -125,6 +126,69 @@ class DoubleCrHeaderCase(Base):
         self.assertNotIn(CR_B, raw, f"恢复后仍有 CR：{raw[:120]!r}")
         self.assertIn("1. 恢复正文".encode("utf-8"), raw)
         self.assertEqual(self.ctl("check").returncode, 0)
+
+
+class PhysicalPanelNormalizationCase(Base):
+    """把 live 面板文件的行尾一次性规范成 LF：管理与注入的结果必须逐字不变。
+
+    真实形状：旧版 `hudctl set` 在 Windows 上把已含 CR 的正文又叠一层换行转换，
+    落盘的 `panel.md` 头部与正文都是 `\\r\\r\\n`。管理端改成 `newline=""` 归一是
+    「读的时候不假红」，但文件本身仍是脏的；物理规范化属于另一件事——它不许
+    改变 check 报的字数/到期，也不许改变注入块。
+    """
+
+    BODY = ("## 硬约束\n"
+            "1. 第一条：用 delegate_task 派活。\n"
+            "2. 第二条：只做可判定的事。\n"
+            "\n"
+            "## 红线\n"
+            "- 不重启。\n"
+            "- 不改凭据。\n")
+    HEAD = (f"session_id: any{CR}{CRLF}expires_at: 2099-01-01T00:00:00+08:00{CR}{CRLF}"
+            f"title: 物理行尾{CR}{CRLF}enabled: true{CR}{CRLF}{CR}{CRLF}")
+
+    def dirty_panel(self) -> bytes:
+        """头部与正文都带双 CR：旧版 set 在 Windows 上留下的真实形状。"""
+        body = "".join(line + CR + CRLF for line in self.BODY.splitlines())
+        return (self.HEAD + body).encode("utf-8")
+
+    def inject_ctx(self) -> str:
+        # 用非 SID 形状的会话 id：面板是 any，取值不影响判据，也免得触发公开仓的会话 id 守卫
+        r = self.inject(sid="physical-lf-probe")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return self.ctx(r)
+
+    def test_double_cr_panel_survives_physical_lf_normalization(self):
+        self.panel.write_bytes(self.dirty_panel())
+        self.assertIn(CR_B, self.panel.read_bytes(), "fixture 里没有双 CR，测不到目标形状")
+
+        # ① 头部/正文带双 CR 时不许假红：元数据完整，字数按归一后的正文算
+        before = self.ctl("check", "--json")
+        self.assertEqual(before.returncode, 0, before.stdout + before.stderr)
+        before_data = json.loads(before.stdout)
+        self.assertTrue(before_data["ok"], before_data)
+        self.assertEqual(before_data["errors"], [])
+        self.assertEqual(before_data["expires_at"], "2099-01-01T00:00:00+08:00")
+        self.assertEqual(before_data["body_chars"], len(self.BODY.strip()))
+        ctx_before = self.inject_ctx()
+        self.assertNotIn(CR, ctx_before, "注入块里还有 CR")
+        self.assertNotIn("\n\n\n", ctx_before, f"双 CR 注出了多余空行：{ctx_before!r}")
+        self.assertIn("entries=4/4", self.logtext(), self.logtext())
+        self.assertIn(f"chars={len(ctx_before)}", self.logtext(), self.logtext())
+
+        # ② 物理规范化：一串 CR 只算一个换行（与注入端 normalize_newlines 同口径）
+        raw = self.panel.read_bytes()
+        self.panel.write_bytes(re.sub(rb"\r+\n|\r+", b"\n", raw))
+        clean = self.panel.read_bytes()
+        self.assertNotIn(CR_B, clean, f"规范化后仍有 CR：{clean[:120]!r}")
+        self.assertTrue(clean.endswith(LF.encode()), clean[-8:])
+
+        # ③ 只改了行尾：check 的 JSON 与注入块必须逐字不变
+        after = self.ctl("check", "--json")
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        self.assertEqual(json.loads(after.stdout), before_data)
+        self.assertEqual(self.inject_ctx(), ctx_before)
+        self.assertEqual(self.logtext().count("entries=4/4"), 2, self.logtext())
 
 
 # --------------------------------------------------------------------------- #
