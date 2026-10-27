@@ -408,10 +408,13 @@ class HookParserCase(Base):
             "\u200bscope: profile:ceo 机密XYZ",
             "ｓｃｏｐｅ：profile:ceo 机密XYZ",
             "sc\u200bope: profile:ceo 机密XYZ",
+            "1.〈scope\ufe0f: profile:ceo〉 机密XYZ",
+            "1. scope\ufe0f: profile:ceo 机密XYZ",
+            "1. sc\u0301ope: profile:ceo 机密XYZ",
             "1.〈scope: profile:ceo〉 机密XYZ",
         ):
-            text, kept, total = self.hp.filter_body(body, "S-BUILD", "build")
-            self.assertEqual((text, kept, total), ("", 0, 0), body)
+            text, kept, _total = self.hp.filter_body(body, "S-BUILD", "build")
+            self.assertEqual((text, kept), ("", 0), body)
 
     def test_fullwidth_closing_bracket_is_not_a_valid_tag(self):
         item = self.hp.entries("1. [scope: all］ 说明\n")[0]

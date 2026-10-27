@@ -218,8 +218,9 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     再看行首是否为 `scop... :`。写法不标准就返回 exact=False，交给调用方 fail-closed。
     """
     original = text.lstrip()
-    normalized = unicodedata.normalize("NFKC", original)
-    cleaned = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
+    decomposed = unicodedata.normalize("NFKD", original)
+    cleaned = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn"))
+    normalized = unicodedata.normalize("NFKC", cleaned)
     m = re.match(r"^(\W*)(scop\w*)\s*:?\s*(.*)$", cleaned, re.IGNORECASE)
     if not m:
         return None
@@ -353,9 +354,10 @@ _strip_leading_scope = strip_leading_scope
 
 def has_scope_like(body: str) -> bool:
     """正文任意位置（任意字符宽度/零宽）出现 `scop...:` 就当作 scope 字样。"""
-    normalized = unicodedata.normalize("NFKC", body)
-    cleaned = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
-    return bool(re.search(r"scop\w*\s*[:：]", cleaned, re.IGNORECASE))
+    decomposed = unicodedata.normalize("NFKD", body)
+    cleaned = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn"))
+    normalized = unicodedata.normalize("NFKC", cleaned)
+    return bool(re.search(r"scop\w*\s*[:：]", normalized, re.IGNORECASE))
 
 
 def filter_body(body: str, session_id: str, profile: str,
