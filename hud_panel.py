@@ -437,7 +437,7 @@ HOOK_EVENT = "pre_llm_call"
 _HOOK_CMD_RE = re.compile(r"command\s*:\s*[\"']?([^\"',}\]]+)")
 
 
-_HUD_INJECT_RE = re.compile(r"(?<![\w.~-])hud_inject\.py(?![.\w~-])")
+_HUD_INJECT_RE = re.compile(r"(?<![\w.~-])hud_inject\.py(?![.\w~-])", re.IGNORECASE)
 
 
 def _strip_yaml_comment_preserve(value: str) -> str:
