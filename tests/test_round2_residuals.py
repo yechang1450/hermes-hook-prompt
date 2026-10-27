@@ -406,6 +406,9 @@ class HookParserCase(Base):
             "scope：profile:ceo 机密XYZ",
             "〈scope: profile:ceo〉 机密XYZ",
             "\u200bscope: profile:ceo 机密XYZ",
+            "ｓｃｏｐｅ：profile:ceo 机密XYZ",
+            "sc\u200bope: profile:ceo 机密XYZ",
+            "1.〈scope: profile:ceo〉 机密XYZ",
         ):
             text, kept, total = self.hp.filter_body(body, "S-BUILD", "build")
             self.assertEqual((text, kept, total), ("", 0, 0), body)

@@ -351,6 +351,13 @@ def strip_leading_scope(line: str) -> str:
 _strip_leading_scope = strip_leading_scope
 
 
+def has_scope_like(body: str) -> bool:
+    """正文任意位置（任意字符宽度/零宽）出现 `scop...:` 就当作 scope 字样。"""
+    normalized = unicodedata.normalize("NFKC", body)
+    cleaned = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
+    return bool(re.search(r"scop\w*\s*[:：]", cleaned, re.IGNORECASE))
+
+
 def filter_body(body: str, session_id: str, profile: str,
                 default_scope=None) -> tuple[str, int, int]:
     """按作用域过滤正文，并删掉 [scope: …] 标注。返回 (新正文, 保留条数, 总条数)。
@@ -361,7 +368,7 @@ def filter_body(body: str, session_id: str, profile: str,
     lines = normalize_newlines(body).splitlines()
     items = entries(body)
     if not items:
-        if INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body):
+        if INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body) or has_scope_like(body):
             return "", 0, 0
         return body, 1, 1
     out: list[str] = lines[: items[0]["start"]]  # 保留第一个条目之前的标题/前言
@@ -453,7 +460,7 @@ def validate(body: str) -> list[str]:
         for token in item.get("invalid_continuation") or []:
             warns.append(f"[scope: {token}] 续行标注非法（只认 all / session:id / profile:name）："
                          "整条不注入（fail-closed）")
-    if not items and INLINE_SCOPE_RE.search(body):
+    if not items and (INLINE_SCOPE_RE.search(body) or has_scope_like(body)):
         warns.append("正文里写了 [scope: …] 却没有任何可识别条目：注入会整块跳过"
                      "（条目必须以 1. / 1) / - / * 顶格开头）")
     lines = normalize_newlines(body).splitlines()
