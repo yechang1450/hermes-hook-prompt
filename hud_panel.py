@@ -30,13 +30,15 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 
 ENTRY_RE = re.compile(r"^(?:\d+[.)、]|[-*])\s+")
 SCOPE_RE = re.compile(r"^\s*\[scope:\s*([^\]]*?)\s*\]\s*", re.IGNORECASE)
 INLINE_SCOPE_RE = re.compile(
-    r"[\[［【（〔｛(<〈]\s*scop(?:e)?\b\s*:?[^\]］】）〕｝)>〉]*[\]］】）〕｝)>〉]?",
+    r"[\[［【（〔「『｛＜(<{]\s*scop\w*\b\s*:?[^\]］】）〕」』｝＞)>}]*[\]］】）〕」』｝＞)>}]?",
     re.IGNORECASE,
 )
+BARE_SCOPE_RE = re.compile(r"(?m)^\s*scop\w*\b\s*:", re.IGNORECASE)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 META_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 # 会话 id / 档名允许的字符：字母数字开头，其余可用 _ . -
@@ -212,13 +214,15 @@ def degenerate_reason(body: str) -> str:
 def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     """只在**行首**（允许前导空白）识别 scope 标注，返回 (token, 是否标准写法)。
 
-    全角括号/全角冒号/缺右括号也算“写了标注”，由调用方按非法处理；
-    正文中间提到 `[scope: …]` 不算标注（旧行为必须保留）。
+    NFKC 先把全角括号/全角字母折成 ASCII，再统一处理各种括号；
+    写法不完全标准也按“像标注”处理，由调用方 fail-closed。
     """
-    stripped = text.lstrip()
-    if not stripped.startswith(("[", "［", "【", "（", "〔", "｛", "(", "<", "〈")):
-        # 无括号的 `scope: …` / `scop: …` 在行首也算“像标注”，必须 fail-closed。
-        bare = re.match(r"^scop(?:e)?\b\s*:?\s*(.*)$", stripped, re.IGNORECASE)
+    original = text.lstrip()
+    stripped = unicodedata.normalize("NFKC", original)
+    opens = "[(<{「『〔【（＜〈"
+    if not stripped.startswith(tuple(opens)):
+        # 无括号的 `scope: …` / `scopes: …` 在行首也算“像标注”。
+        bare = re.match(r"^scop\w*\b\s*:?\s*(.*)$", stripped, re.IGNORECASE)
         if bare:
             return bare.group(1).strip(), False
         return None
@@ -226,44 +230,35 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
         stripped.replace("［", "[").replace("］", "]")
         .replace("【", "[").replace("】", "]")
         .replace("（", "[").replace("）", "]")
-        .replace("(", "[").replace(")", "]")
         .replace("〔", "[").replace("〕", "]")
+        .replace("「", "[").replace("」", "]")
+        .replace("『", "[").replace("』", "]")
         .replace("｛", "[").replace("｝", "]")
+        .replace("＜", "[").replace("＞", "]")
+        .replace("(", "[").replace(")", "]")
+        .replace("{", "[").replace("}", "]")
         .replace("<", "[").replace(">", "]")
-        .replace("〈", "[").replace("〉", "]")
         .replace("：", ":")
     )
-    # 冒号可有可无：`[scope profile:ceo]` 也是“像标注”，必须 fail-closed。
-    m = re.match(r"^\[\s*scop(?:e)?\b\s*:?\s*(.*)$", normalized, re.IGNORECASE)
+    m = re.match(r"^\[\s*scop\w*\b\s*:?\s*(.*)$", normalized, re.IGNORECASE)
     if not m:
         return None
     body = m.group(1)
     token = body.split("]", 1)[0].strip()
-    # 只看标注本身，不看整行：正文里的中文冒号不是 scope 写法错误。
     # 起始括号决定配对的闭合括号：ASCII 标签后面出现 `［附件］` 不能截错。
-    if stripped.startswith("["):
-        close = "]"
-    elif stripped.startswith("［"):
-        close = "］"
-    elif stripped.startswith("【"):
-        close = "】"
-    elif stripped.startswith("（"):
-        close = "）"
-    elif stripped.startswith("｛"):
-        close = "｝"
-    elif stripped.startswith("<"):
-        close = ">"
-    elif stripped.startswith("〈"):
-        close = "〉"
-    else:
-        close = "〕"
-    tag = stripped.split(close, 1)[0]
+    close = {
+        "[": "]", "［": "］", "【": "】", "（": "）", "〔": "〕",
+        "「": "」", "『": "』", "｛": "｝", "＜": "＞", "(": ")",
+        "{": "}", "<": ">",
+    }.get(original[0], "]")
+    tag = original.split(close, 1)[0]
     exact = (
-        stripped.startswith("[")
+        original.startswith("[")
         and bool(SCOPE_RE.match(normalized))
         and not any(
             ch in tag
-            for ch in ("［", "］", "【", "】", "（", "）", "〔", "〕", "｛", "｝", "<", ">", "〈", "〉", "：")
+            for ch in ("［", "］", "【", "】", "（", "）", "〔", "〕", "「", "」",
+                       "『", "』", "｛", "｝", "＜", "＞", "(", ")", "{", "}", "<", ">", "：")
         )
     )
     return token, exact
@@ -388,7 +383,7 @@ def filter_body(body: str, session_id: str, profile: str,
     lines = normalize_newlines(body).splitlines()
     items = entries(body)
     if not items:
-        if INLINE_SCOPE_RE.search(body):
+        if INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body):
             return "", 0, 0
         return body, 1, 1
     out: list[str] = lines[: items[0]["start"]]  # 保留第一个条目之前的标题/前言
