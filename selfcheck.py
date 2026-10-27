@@ -175,11 +175,18 @@ def check() -> tuple[list[dict], bool, list[str]]:
     results: list[dict] = []
     notices: list[str] = []
 
-    def add(name: str, ok: bool, detail: str = "") -> None:
-        results.append({"check": name, "ok": ok, "detail": detail})
+    def add(name: str, ok: bool, detail: str = "", ok_detail: str = "") -> None:
+        """记一条检查结果：失败写「哪里不对」（detail），成功写「验到了什么」（ok_detail）。
+
+        成功时不能沿用失败文案：state/selfcheck.json 是给人排障看的，`ok: true` 旁边写着
+        「缺 hud_panel.py」「没有批准记录」会让人以为自检红了。没给 ok_detail 时才退回 detail。
+        """
+        results.append({"check": name, "ok": ok,
+                        "detail": (ok_detail or detail) if ok else detail})
 
     add("modules:hud_panel", hud_panel is not None,
-        "缺 hud_panel.py：注入会整块跳过（fail-closed）")
+        "缺 hud_panel.py：注入会整块跳过（fail-closed）",
+        "hud_panel.py 可导入（元数据/作用域/指纹解析就位）")
 
     if SOURCE is None:
         # 找不到源码 ≠ 机制坏了：profile 家目录、仅装运行包、源码被挪走都可能这样。
@@ -192,19 +199,23 @@ def check() -> tuple[list[dict], bool, list[str]]:
     else:
         hits = _find_event()
         add("source:pre_llm_call 事件", bool(hits),
-            f"在 {', '.join(SEARCH_GLOBS)} 里没找到 pre_llm_call" if not hits else ", ".join(hits[:4]))
+            f"在 {', '.join(SEARCH_GLOBS)} 里没找到 pre_llm_call",
+            f"命中 {len(hits)} 个文件：{', '.join(hits[:4])}")
 
         turn_src = _read(SOURCE / "agent" / "turn_context.py")
         add("source:上下文注入点", ("pre_llm_call" in turn_src) and ("plugin_user_context" in turn_src),
-            "agent/turn_context.py 里找不到 pre_llm_call / plugin_user_context")
+            "agent/turn_context.py 里找不到 pre_llm_call / plugin_user_context",
+            "agent/turn_context.py 仍把 hook 返回值注入 plugin_user_context")
 
     cfg = _read(PROFILE_DIR / "config.yaml")
     has_hook = "pre_llm_call" in cfg and "hud_inject.py" in cfg
-    add("config:hooks.pre_llm_call", has_hook, f"{PROFILE_DIR / 'config.yaml'} 缺声明的钩子")
+    add("config:hooks.pre_llm_call", has_hook, f"{PROFILE_DIR / 'config.yaml'} 缺声明的钩子",
+        f"已声明：{PROFILE_DIR / 'config.yaml'} → hud_inject.py")
 
     allow = _read(PROFILE_DIR / "shell-hooks-allowlist.json")
     approved = "pre_llm_call" in allow and "hud_inject.py" in allow
-    add("allowlist:已同意", approved, "该档没有 hud_inject.py 的 pre_llm_call 批准记录")
+    add("allowlist:已同意", approved, "该档没有 hud_inject.py 的 pre_llm_call 批准记录",
+        "该档已有 hud_inject.py 的 pre_llm_call 批准记录")
 
     ok_e2e, detail_e2e = _e2e()
     add("e2e:注入返回 context", ok_e2e, detail_e2e)

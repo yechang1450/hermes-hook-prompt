@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import stat as _stat
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -32,6 +33,29 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 LINE = re.compile(r"^(?P<ts>[\d\-T:+]+)\s+(?P<kind>[A-Za-z_-]+)\s+(?P<rest>.*)$")
+
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+# 预览只取前几行：面板被写坏成几百 KB 时也没必要整份读进来
+PREVIEW_BYTES = 64 * 1024
+
+
+def _unsafe_panel(path: Path) -> str:
+    """返回拒绝预览的原因；安全则空串。
+
+    只读报告也不能跟随软链：`panel.md -> ~/.ssh/id_rsa` 会把仓外文件的前几行打出来。
+    与 hudctl 的 `_unsafe_path` 同口径：lstat 判软链/重解析点/非普通文件，不对目标做 stat。
+    """
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return ""
+    except OSError as exc:
+        return f"无法 lstat（{type(exc).__name__}）"
+    if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT:
+        return "是符号链接/重解析点"
+    if not _stat.S_ISREG(st.st_mode):
+        return "不是普通文件"
+    return ""
 
 
 def main() -> int:
@@ -129,11 +153,20 @@ def main() -> int:
     for line in recent[-5:]:
         print("  " + line)
 
-    if PANEL.exists():
+    if PANEL.exists() or PANEL.is_symlink():
+        unsafe = _unsafe_panel(PANEL)
+        if unsafe:
+            print(f"\n当前面板：{unsafe}，拒绝预览：{PANEL}"
+                  "（换回普通文件再跑；绝不对链接目标读内容）")
+            return 0
         try:
-            head = PANEL.read_text(encoding="utf-8").splitlines()[:4]
+            with PANEL.open("r", encoding="utf-8", newline="") as fh:
+                head = fh.read(PREVIEW_BYTES).splitlines()[:4]
         except UnicodeDecodeError:
             print("\n当前面板：不是合法 UTF-8，无法预览")
+            return 0
+        except OSError as exc:
+            print(f"\n当前面板：读不到（{type(exc).__name__}）：{PANEL}")
             return 0
         print("\n当前面板：")
         for line in head:

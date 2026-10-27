@@ -17,6 +17,10 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = ["hud_inject.py", "hudctl.py", "hud_report.py", "hud_panel.py", "panel.example.md"]
 # 这三个变量若被外部环境污染（如同 shell 里跑过隔离实验），测试会读写错面板
 ENV_KEYS = ("HUD_PANEL", "HUD_LOG", "HUD_SNAPS", "HUD_STATE")
+# 行尾用 chr() 拼：测试文件本身保持 LF，不依赖编辑器/平台的行尾转换
+CR, LF = chr(13), chr(10)
+CRLF = CR + LF
+CR_B = bytes([13])
 
 
 class HudCase(unittest.TestCase):
@@ -542,6 +546,46 @@ class HudCase(unittest.TestCase):
         r = subprocess.run([sys.executable, str(self.dir / "hud_report.py")],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         self.assertEqual(r.returncode, 1)
+
+    # ---- P1：行尾归一（CRLF / 双 CR） --------------------------------
+    def test_set_normalizes_crlf_body(self):
+        """`--body` 是 CRLF 文件时，面板里不能留任何 CR 字符（旧版会叠成双 CR 行尾）。"""
+        body = self.dir / "body-crlf.md"
+        body.write_bytes(f"1. 第一条{CRLF}   续行 A{CRLF}{CRLF}2. 第二条{CRLF}   续行 B{CRLF}".encode("utf-8"))
+        r = self.run_ctl("set", "--ttl", "2h", "--body", str(body))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        raw = self.panel.read_bytes()
+        self.assertNotIn(CR_B, raw, f"面板里还有 CR：{raw[:160]!r}")
+        ctx = self.context(self.inject()[1])
+        # 每行之间不多空行：条目内续行紧贴、条目之间恰好一个空行
+        self.assertIn(f"1. 第一条{LF}   续行 A{LF}{LF}2. 第二条{LF}   续行 B", ctx)
+
+    def test_set_normalizes_crlf_from_stdin(self):
+        env = self.base_env()
+        r = subprocess.run([sys.executable, str(self.dir / "hudctl.py"), "set", "--ttl", "2h"],
+                           input=f"1. 甲{CRLF}   续{CRLF}", capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=self.dir, env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn(CR_B, self.panel.read_bytes())
+        self.assertIn(f"1. 甲{LF}   续", self.context(self.inject()[1]))
+
+    def test_inject_collapses_legacy_double_cr(self):
+        """旧版已经写坏的面板（CRLF 前多一个 CR）不手改也能正常注入：一串 CR 只算一个换行。"""
+        legacy = (f"session_id: any{CRLF}expires_at: 2099-01-01T00:00:00+08:00{CRLF}"
+                  f"title: t{CRLF}enabled: true{CRLF}{CRLF}"
+                  f"1. 一{CR}{CRLF}   续{CR}{CRLF}{CR}{CRLF}2. 二{CRLF}")
+        self.panel.write_bytes(legacy.encode("utf-8"))
+        ctx = self.context(self.inject()[1])
+        self.assertIn(f"1. 一{LF}   续{LF}{LF}2. 二", ctx)
+
+    def test_check_does_not_mistake_double_cr_for_blank_lines(self):
+        """check 与注入同一口径：双 CR 面板不算格式错。"""
+        legacy = (f"session_id: any{CRLF}expires_at: 2099-01-01T00:00:00+08:00{CRLF}"
+                  f"title: t{CRLF}enabled: true{CRLF}{CRLF}1. 一{CR}{CRLF}   续{CRLF}")
+        self.panel.write_bytes(legacy.encode("utf-8"))
+        r = self.run_ctl("check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("✓", r.stdout)
 
 
 if __name__ == "__main__":

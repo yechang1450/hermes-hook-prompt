@@ -135,11 +135,15 @@ def _atomic_write_text(path: Path, data: str) -> Path:
 
     临时文件名由 `tempfile.mkstemp`（O_CREAT|O_EXCL）生成，**不会**落到可预测的
     `panel.md.<pid>.tmp` 上：被人预算好名字放一个软链，旧写法会把数据写进受害文件。
+
+    固定 `newline="\n"`：文本模式的默认换行转换会在 Windows 上把每个 `\\n` 写成 CRLF，
+    正文里本来就有 CRLF 时就叠成双 CR 行尾——注入端 `splitlines()` 会把它算成两个换行。
+    面板一律按 LF 落盘，跨平台字节一致。
     """
     fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent))
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(data)
         os.replace(tmp, path)
     finally:
@@ -177,6 +181,17 @@ def _panel_size() -> int:
         return PANEL.stat().st_size
     except OSError:
         return 0
+
+
+def _normalize_newlines(text: str) -> str:
+    r"""CRLF / 裸 CR / 旧版叠出来的 `\r\r\n` 统一成 `\n`（与 hud_panel 同一实现）。
+
+    写入前在**唯一的入口**归一：正文来自 `--body` 文件、stdin、快照恢复时行尾各不相同，
+    不归一就会把双 CR 写进面板，注入端再按行拆就多出空行。
+    """
+    if hud_panel is not None:
+        return hud_panel.normalize_newlines(text)
+    return re.sub(r"\r+\n|\r+", "\n", text) if "\r" in text else text
 
 
 def _strip_comment(value: str) -> str:
@@ -234,7 +249,7 @@ def read_panel_ex(create: bool = True, head_only: bool = False) -> tuple[dict[st
     if not PANEL.exists():
         sample = ROOT / "panel.example.md"
         if sample.exists():
-            PANEL.write_text(sample.read_text(encoding="utf-8").lstrip("\ufeff"), encoding="utf-8")
+            _atomic_write_text(PANEL, sample.read_text(encoding="utf-8").lstrip("\ufeff"))
             print(f"（面板不存在，已从 panel.example.md 复制：{PANEL}）")
         else:
             raise SystemExit(f"面板不存在：{PANEL}（先 cp panel.example.md panel.md）")
@@ -255,7 +270,9 @@ def read_panel_ex(create: bool = True, head_only: bool = False) -> tuple[dict[st
                 f"面板过大（{size} 字节 > {MAX_PANEL_READ_BYTES}）：拒绝整份读取 {PANEL}；"
                 "要换掉它用 set --body <文件>（set 只读头部，可整份覆盖）")
         try:
-            raw = PANEL.read_text(encoding="utf-8")
+            # newline=""：保留原始行尾，交给 hud_panel.normalize_newlines 统一（`\r\r\n` 只算一个换行）
+            with PANEL.open("r", encoding="utf-8", newline="") as fh:
+                raw = fh.read()
         except UnicodeDecodeError:
             raise SystemExit(f"面板不是合法 UTF-8：{PANEL}")
     return _split_panel_ex(raw.lstrip("\ufeff"))
@@ -284,7 +301,7 @@ def render_panel(meta: dict[str, str], body: str) -> str:
         if "\n" in meta.get(key, "") or "\r" in meta.get(key, ""):
             raise SystemExit(f"元数据 {key} 不能包含换行")
     head = "\n".join(f"{k}: {meta.get(k, '')}" for k in META_KEYS)
-    return f"{head}\n\n{body}\n"
+    return f"{head}\n\n{_normalize_newlines(body)}\n"
 
 
 def write_panel(meta: dict[str, str], body: str) -> None:
@@ -862,7 +879,7 @@ def cmd_preview(args) -> int:
     target = Path(args.body)
     if not target.is_file():
         raise SystemExit(f"正文文件不存在：{target}")
-    new_body = target.read_text(encoding="utf-8").lstrip("\ufeff").strip()
+    new_body = _read_body_file(target)   # 与 set 同一读取口径：UTF-8 校验 + 换行归一
     # 预览按“确认后会执行 set”的状态算：启用 + 重新续期
     sim = dict(meta)
     sim["enabled"] = "true"
@@ -925,10 +942,11 @@ def cmd_scope(args) -> int:
         rest = hud_panel.SCOPE_RE.sub("", lines[item["start"]][len(marker):], count=1).lstrip()
         tag = "" if value.lower() == "none" else f"[scope: {value}] "
         block = [marker + tag + rest]
+        drop = set(item.get("scope_lines") or ([item["scope_line"]] if item["scope_line"] is not None else []))
         for idx in range(item["start"] + 1, item["end"]):
             line = lines[idx]
-            if idx == item["scope_line"]:
-                # 续行上被认作标注的那一处一并清掉：留两处有效标注会让整条失效
+            if idx in drop:
+                # 续行上被认作标注的**每一处**都清掉：只清第一处，第二处仍会让整条失效
                 line = hud_panel.SCOPE_RE.sub("", line, count=1).rstrip()
                 if not line.strip():
                     continue
@@ -1030,7 +1048,7 @@ def _read_body_file(path: Path) -> str:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         _die(f"正文不是合法 UTF-8：{path}（另存为 UTF-8 再试）")
-    return text.lstrip("\ufeff").strip()
+    return _normalize_newlines(text.lstrip("\ufeff")).strip()
 
 
 def cmd_set(args) -> int:
@@ -1051,11 +1069,17 @@ def cmd_set(args) -> int:
         if args.body:
             body = _read_body_file(Path(args.body))
         elif not sys.stdin.isatty():
+            # 按字节读再自己解码：文本模式的通用换行会先把 CRLF 折成 LF、把双 CR 折成两个
+            # 换行，后面的归一就再也分不清原文到底几个换行了。
             try:
-                incoming = sys.stdin.read()
+                raw = sys.stdin.buffer.read()
+            except AttributeError:      # 被替换成纯文本流的调用方（测试/嵌入）
+                raw = sys.stdin.read().encode("utf-8", "replace")
+            try:
+                incoming = raw.decode("utf-8")
             except UnicodeDecodeError:
                 _die("stdin 不是合法 UTF-8（用 --body 指定 UTF-8 文件）")
-            body = incoming.lstrip("\ufeff").strip()
+            body = _normalize_newlines(incoming.lstrip("﻿")).strip()
         else:
             # TTY 且没给正文：不阻塞等输入，直接提示怎么用
             _die("没有正文：用 --body <文件>，或从管道喂入"
@@ -1118,6 +1142,7 @@ def _inspect_panel(raw: str) -> dict:
     if raw.startswith("\ufeff"):
         notices.append("文件带 BOM（注入端能容忍，建议去掉）")
         raw = raw.lstrip("\ufeff")
+    raw = _normalize_newlines(raw)
 
     seen: set[str] = set()
     for line in raw.splitlines()[:24]:

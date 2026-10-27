@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PY = sys.executable
+LF = chr(10)
 
 
 def write_panel(path: Path, body: str, scope: str = "any") -> None:
@@ -241,6 +242,89 @@ class ImpactFilterCase(unittest.TestCase):
         wrong_case = self.impact("--profile", "CEO")
         self.assertEqual(wrong_case.returncode, 1)
         self.assertIn("大小写敏感", wrong_case.stderr)
+
+
+class ConflictCase(unittest.TestCase):
+    """P1：同一 entry 两处及以上 `[scope: …]` 必须判冲突（注入整条失效 + check 报错）。"""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.home = Path(self.td.name)
+        self.panel = self.home / "panel.md"
+        self.log = self.home / "hud.log"
+        self.state = self.home / "state"
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def env(self):
+        return dict(os.environ, HUD_PANEL=str(self.panel), HUD_STATE=str(self.state),
+                    HUD_LOG=str(self.log), PYTHONIOENCODING="utf-8")
+
+    def inject(self, sid="AAA", profile="default"):
+        return subprocess.run([PY, str(REPO / "hud_inject.py")],
+                              input=json.dumps({"session_id": sid, "profile": profile}),
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=self.env(), timeout=120)
+
+    def context(self, proc):
+        return json.loads(proc.stdout)["context"] if proc.stdout.strip() else ""
+
+    def check(self):
+        return subprocess.run([PY, str(REPO / "hudctl.py"), "check"],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=self.env(), cwd=str(self.home), timeout=120)
+
+    def test_two_continuation_labels_conflict(self):
+        """旧实现只认第一处续行标注，第二处会当正文注进上下文且 check 还是绿的。"""
+        write_panel(self.panel,
+                    "1. 条目甲\n   [scope: profile:default]\n   [scope: session:AAA]\n   正文甲\n\n"
+                    "2. 条目乙\n   正文乙")
+        out = self.context(self.inject("AAA", "default"))
+        self.assertNotIn("条目甲", out)      # 冲突 → 整条不注入（fail-closed）
+        self.assertNotIn("[scope:", out)     # 第二条标注绝不能当正文注进上下文
+        self.assertIn("条目乙", out)
+        r = self.check()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("写了两处标注", r.stdout)
+
+    def test_first_line_plus_two_continuations_counts_all(self):
+        write_panel(self.panel,
+                    "1. [scope: all] 甲\n   [scope: profile:default]\n   [scope: session:AAA]\n   正文甲")
+        r = self.check()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("写了 3 处标注", r.stdout)
+        self.assertNotIn("[scope:", self.context(self.inject("AAA", "default")))
+
+    def test_scope_command_repairs_conflict(self):
+        """`scope <n> all` 要清掉**所有**续行标注，否则第二处还留着、check 继续红。"""
+        write_panel(self.panel, LF.join([
+            "1. 甲",
+            "   [scope: profile:default]",
+            "   [scope: session:AAA]",
+            "   正文甲",
+        ]))
+        r = subprocess.run([PY, str(REPO / "hudctl.py"), "scope", "1", "all"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=self.env(), cwd=str(self.home), timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = self.panel.read_text(encoding="utf-8")
+        self.assertEqual(text.count("[scope:"), 1, text)      # 只剩 scope 命令刚写的那一处
+        self.assertIn("1. [scope: all] 甲", text)
+        self.assertEqual(self.check().returncode, 0)
+        self.assertIn("正文甲", self.context(self.inject("BBB", "default")))
+
+    def test_single_continuation_label_still_works(self):
+        """只有一处标注时行为不变：按标注过滤，标注本身删掉。"""
+        write_panel(self.panel,
+                    "1. 甲\n   [scope: session:AAA]\n   正文甲\n\n2. 乙")
+        a = self.context(self.inject("AAA", "default"))
+        b = self.context(self.inject("BBB", "default"))
+        self.assertIn("正文甲", a)
+        self.assertNotIn("正文甲", b)
+        self.assertIn("乙", b)
+        self.assertNotIn("[scope:", a)
+        self.assertEqual(self.check().returncode, 0)
 
 
 if __name__ == "__main__":

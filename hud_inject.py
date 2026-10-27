@@ -215,7 +215,9 @@ def main() -> int:
     except OSError:
         pass
     try:
-        with open(PANEL, encoding="utf-8") as fh:
+        # newline="" 关掉通用换行转换：旧版写出的双 CR 行尾要原样交给
+        # hud_panel.normalize_newlines 归一，否则会先被拆成两个换行，注入时多出空行。
+        with open(PANEL, encoding="utf-8", newline="") as fh:
             text = fh.read(MAX_PANEL_BYTES)
     except FileNotFoundError:
         log(f"skip no-panel session={_log_sid(session_id)} profile={profile}")

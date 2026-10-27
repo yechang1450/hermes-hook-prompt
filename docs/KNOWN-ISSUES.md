@@ -75,6 +75,16 @@ CI 矩阵：`ubuntu-latest` / `windows-latest` × Python 3.10 / 3.12，4/4 绿�
 
 ## 已修复（留档对账）
 
+- **`set --body` 把 CRLF 正文写成双 CR 行尾**：Windows 上文本模式默认换行转换把每个 `LF` 写成 `CRLF`，正文自带 CRLF 时就叠成 `CR CR LF`；`splitlines()` 把它当两个换行，注入到上下文里每行之间多出空行。
+  修法：写入端 `--body`/stdin/`render_panel` 统一 `normalize_newlines`（CRLF、裸 CR、双 CR → `LF`），原子写固定 `newline=LF`；读取端 `hud_inject`/`hudctl` 以 `newline=""` 读原文再归一，所以旧版已经写坏的面板不用手改也能正常注入。回归：`tests/test_hud.py` 的四条行尾用例。
+- **同一 entry 有多处 `[scope: …]` 只认第一处**：第二处标注被当普通正文注进上下文，`check` 还是绿的。
+  修法：`hud_panel.entries()` 扫整条续行，两处及以上 → `conflict`（整条不注入），`validate()` 列出全部冲突标注与处数。回归：`tests/test_scope.py::ConflictCase`。
+- **`hud_report.py` 预览跟随软链 / 目录抛 traceback**：`panel.md -> ~/.ssh/id_rsa` 时会把仓外文件前 4 行打出来。
+  修法：与 `hudctl._unsafe_path` 同口径先 `lstat`，软链/重解析点/非普通文件只报拒绝原因（exit 0，不中断报告）。回归：`tests/test_fs_safety.py::ReportPreviewCase`。
+- **`selfcheck.py` 成功时 detail 仍写失败文案**（`ok: true` 旁边写「缺 hud_panel.py」「没有批准记录」）。
+  修法：`add()` 增加 `ok_detail`，成功与失败各写各的；失败文案保持原样。回归：`tests/test_selfcheck.py` 两条。
+- **会话 id 守卫只扫仓库根**：`tests/**/*.py` 里的真实 id 扫不到。
+  修法：守卫增加 tests 目录扫描，按 `TEST_RESIDUE` 白名单比对（历史残留只登记、不改写），未知 id 直接失败。
 - **并发建锁被误判成「重解析点」**（CI `windows-latest/3.12` 的 `test_concurrent_scope_updates_are_not_lost` 变红，run `40183862352`）：
   `_unsafe_path()` 在 `os.lstat` 抛 `FileNotFoundError` 后用 `os.path.lexists` 判「悬空软链」，而并发进程可能刚把普通锁文件建出来，于是 `lexists=True` → 误报「是符号链接/重解析点（目标不可达）」→ `scope` exit 2。
   修法：该分支**直接返回空串**，是否存在/是否普通文件交给后续 `open()`/`fstat()`。

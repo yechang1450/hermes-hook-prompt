@@ -13,8 +13,12 @@
         13. 不带标注 = 跟随面板 session_id（默认 all）
 
      `[scope: …]` 也可以写在该条目的**续行**行首（缩进不限），同样算这一条的标注。
+     同一条目写了**两处及以上**（首行一处 + 续行，或续行里两处）→ 判冲突，整条不注入。
      解析口径：一个新条目 = 以 `1.` / `1)` / `1、` / `-` / `*` 开头的顶格行；
      缩进的续行归上一条；空行保留在原来位置；代码围栏里的内容不参与解析。
+
+     换行统一按 `\n` 处理（`normalize_newlines`）：CRLF、裸 CR、旧版 `hudctl set` 在
+     Windows 上叠出来的 `\r\r\n` 都只算一个换行，绝不因为行尾符多注出空行。
 
   3. 机制指纹：关键源码文件的**内容哈希**（不是 size+mtime），inject 与 selfcheck 同一口径。
      源码根从家目录向上找 `hermes-agent`（HERMES_HOME 指到 profiles/<名> 时也能找到），
@@ -53,6 +57,21 @@ MECH_FILES = (
 
 
 # --------------------------------------------------------------------------- #
+# 换行归一
+# --------------------------------------------------------------------------- #
+def normalize_newlines(text: str) -> str:
+    r"""把 CRLF / 裸 CR / `\r\r\n` 统一成 `\n`（一串 CR 只算一个换行）。
+
+    旧版 `hudctl set --body` 在 Windows 上按平台默认写 CRLF，而正文文件本身已是 CRLF，
+    落盘就叠成 `\r\r\n`；`splitlines()` 会把它当两个换行，注进上下文就是多出来的空行。
+    读的时候先归一，坏面板不必手改也能正常注入；写端同时按 `\n` 落盘（双保险）。
+    """
+    if not text or "\r" not in text:
+        return text
+    return re.sub(r"\r+\n|\r+", "\n", text)
+
+
+# --------------------------------------------------------------------------- #
 # 头部元数据
 # --------------------------------------------------------------------------- #
 def strip_comment(value: str) -> str:
@@ -87,7 +106,7 @@ def split_meta(text: str) -> tuple[dict[str, str], str, list[str]]:
     """
     meta: dict[str, str] = {}
     unknown: list[str] = []
-    lines = text.splitlines()
+    lines = normalize_newlines(text).splitlines()
     body_start = 0
     for i, line in enumerate(lines[:META_SCAN_LINES]):
         stripped = line.strip()
@@ -173,7 +192,7 @@ def _fence_mask(lines: list[str]) -> list[bool]:
 def unclosed_fence(body: str) -> bool:
     """代码围栏是否未闭合。未闭合时条目边界不可信 → 调用方必须整块跳过。"""
     fence = None
-    for line in body.splitlines():
+    for line in normalize_newlines(body).splitlines():
         if FENCE_RE.match(line):
             fence = None if fence else True
     return fence is not None
@@ -187,15 +206,21 @@ def degenerate_reason(body: str) -> str:
 
 
 def entries(body: str) -> list[dict]:
-    """切成条目：{start,end,scope_token,scope,scope_line,conflict,invalid_continuation}。
+    """切成条目：{start,end,scope_token,scope,scope_line,scope_lines,conflict,scope_labels,
+    invalid_continuation}。
 
     scope=None 表示非法或未标注（未标注时由调用方补默认范围）；
-    scope_line 是写在续行行首的那处标注的行号（删除标注时用）；同一 entry 两处标注 → conflict。
+    scope_line 是第一处续行标注的行号，scope_lines 是**全部**续行标注的行号
+    （`hudctl scope` 修冲突时要全部删掉，只删第一处第二处还会让整条失效）；
+    同一 entry 两处及以上标注 → conflict（整条不注入）。
 
     续行行首的 `[scope: …]` **只有解析得出来才算标注**：写法非法时按普通续行文本原样保留
     （列进 invalid_continuation 供 check 告警），绝不因为一句写坏的标注把整条丢掉。
+
+    判冲突必须扫**整条**的所有续行：只看第一处会把第二条标注当普通正文留在条目里，
+    结果注入端带着 `[scope: …]` 原文注进上下文、check 却还是绿的。
     """
-    lines = body.splitlines()
+    lines = normalize_newlines(body).splitlines()
     mask = _fence_mask(lines)
     starts = [i for i, line in enumerate(lines) if not mask[i] and ENTRY_RE.match(line)]
     out: list[dict] = []
@@ -206,7 +231,9 @@ def entries(body: str) -> list[dict]:
         rest = first[len(marker.group(0)):] if marker else first
         m = SCOPE_RE.match(rest)
         token = m.group(1) if m else None
+        labels: list[str] = [token] if token is not None else []
         scope_line = None
+        scope_lines: list[int] = []
         conflict = False
         invalid_continuation: list[str] = []
         for i in range(start + 1, end):
@@ -219,15 +246,19 @@ def entries(body: str) -> list[dict]:
             if parse_scope(found) is None:
                 invalid_continuation.append(found)   # 非法：不当标注，正文原样留着
                 continue
-            if token is not None:
-                conflict = True
+            labels.append(found)
+            scope_lines.append(i)
+            if scope_line is None:
                 scope_line = i
-            else:
-                token, scope_line = found, i
-            break
+        if len(labels) > 1:
+            conflict = True                  # 两处及以上：整条失效（fail-closed）
+            token = labels[0]
+        elif labels:
+            token = labels[0]
         scope = None if conflict else (parse_scope(token) if token else None)
         out.append({"start": start, "end": end, "scope_token": token, "scope": scope,
-                    "scope_line": scope_line, "conflict": conflict,
+                    "scope_line": scope_line, "scope_lines": scope_lines,
+                    "conflict": conflict, "scope_labels": labels,
                     "invalid_continuation": invalid_continuation})
     return out
 
@@ -257,7 +288,7 @@ def filter_body(body: str, session_id: str, profile: str,
     零条目时：不带 `[scope:]` 的自由正文按一整块放行（旧行为）；带标注却解析不出条目
     → 返回空正文 + 0 条，调用方必须跳过——绝不把带标签的原文原样广播给所有会话。
     """
-    lines = body.splitlines()
+    lines = normalize_newlines(body).splitlines()
     items = entries(body)
     if not items:
         if INLINE_SCOPE_RE.search(body):
@@ -295,7 +326,7 @@ def entry_texts(body: str) -> list[str]:
     preview 的条目增删比较必须用它，而不是截断后的标题：长条目前缀相同、条目重复，
     都会让「截断后做集合比较」得出错误的增删结论。
     """
-    lines = body.splitlines()
+    lines = normalize_newlines(body).splitlines()
     result: list[str] = []
     for item in entries(body):
         block = lines[item["start"]:item["end"]]
@@ -331,14 +362,17 @@ def invalid_scopes(body: str) -> list[str]:
 
 
 def validate(body: str) -> list[str]:
-    """返回作用域相关的告警（非法 / 两处冲突 / 不在行首 / 带标注却没有条目）。"""
+    """返回作用域相关的告警（非法 / 两处及以上冲突 / 不在行首 / 带标注却没有条目）。"""
     warns: list[str] = []
     items = entries(body)
     for item in items:
         if item["scope_token"] is None:
             continue
+        labels = item.get("scope_labels") or [item["scope_token"]]
         if item["conflict"]:
-            warns.append(f"[scope: {item['scope_token']}] 同一 entry 写了两处标注（注入时整条失效）")
+            shown = "、".join(f"[scope: {label}]" for label in labels)
+            phrase = "写了两处标注" if len(labels) == 2 else f"写了 {len(labels)} 处标注"
+            warns.append(f"{shown} 同一 entry {phrase}（只许一处，注入时整条失效）")
         elif item["scope"] is None:
             warns.append(f"[scope: {item['scope_token']}] 非法（只认 all / session:id / profile:name）")
     for item in items:
@@ -348,7 +382,7 @@ def validate(body: str) -> list[str]:
     if not items and INLINE_SCOPE_RE.search(body):
         warns.append("正文里写了 [scope: …] 却没有任何可识别条目：注入会整块跳过"
                      "（条目必须以 1. / 1) / - / * 顶格开头）")
-    lines = body.splitlines()
+    lines = normalize_newlines(body).splitlines()
     mask = _fence_mask(lines)
     for item in items:
         for idx in range(item["start"], item["end"]):

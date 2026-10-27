@@ -23,7 +23,7 @@
 ## 文件安全
 
 - 面板是**符号链接 / Windows 重解析点**时，`hud_inject.py` 拒绝读取（日志记 `skip unsafe-panel`）——防止把 `~/.ssh/id_rsa` 之类的文件当面板送进模型；
-- 面板必须是普通文件，FIFO/设备文件一律拒绝；`hudctl.py` 的所有读路径（`status`/`check`/`impact`/`preview`/`snapshot`/`restore`…）同样先 `lstat`，软链/重解析点直接拒绝（exit 2），不跟随；
+- 面板必须是普通文件，FIFO/设备文件一律拒绝；`hudctl.py` 的所有读路径（`status`/`check`/`impact`/`preview`/`snapshot`/`restore`…）同样先 `lstat`，软链/重解析点直接拒绝（exit 2），不跟随；`hud_report.py` 的「当前面板」预览同口径——面板是软链/重解析点/目录时只打印拒绝原因，绝不把仓外文件的前几行打出来；
 - `hudctl.py` 写面板用「同目录临时文件 + `os.replace`」原子替换，临时文件名由 `tempfile.mkstemp`（`O_CREAT|O_EXCL`）随机生成——不再使用可预测的 `panel.md.<pid>.tmp`，预置软链无法被跟随写入；`selfcheck.py` 写 `state/selfcheck.json` 同理；
 - 读改写走**同一把文件锁**（`panel.md.lock`），并发的 `set/off/on/scope/use/restore` 不会互相覆盖丢更新；锁文件打开前 `lstat` 拒绝软链/重解析点，打开后 `fstat` 再验普通文件（POSIX 另加 `O_NOFOLLOW`）；整份读取的绝对上限是 2 MB，超过 200 KB 时 `status`/`set` 只读头部（`set` 因此能整份覆盖被写坏的超大面板）、`check` 只报大小，不给自己留死角；
 - `restore` 覆盖前会先把当前面板存成 `snapshots/pre-restore-<时间戳>.md`；写不进快照就**拒绝恢复**；快照内容先按 `hudctl check` 的同一套规则校验，非法快照直接拒绝（exit 2），绝不把现网面板一起写坏；快照本身是软链/重解析点时同样拒绝使用；

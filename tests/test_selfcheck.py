@@ -180,5 +180,28 @@ class SelfcheckCase(unittest.TestCase):
         self.assertNotIn("Hermes 已更新", self.inject())
 
 
+    # ---- P2：成功时 detail 写成功文案 --------------------------------
+    def test_green_check_details_describe_success(self):
+        """state/selfcheck.json 的 ok 项旁边不能写「缺 xx」「没有记录」这种失败文案。"""
+        r = self.run_check()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        details = {c["check"]: c["detail"] for c in self.state_data()["checks"]}
+        for name, detail in details.items():
+            self.assertTrue(detail, f"{name} 成功时 detail 为空")
+            for bad in ("缺", "找不到", "没有", "失败"):
+                self.assertNotIn(bad, detail, f"{name} 成功却写了失败文案：{detail}")
+        self.assertIn("可导入", details["modules:hud_panel"])
+        self.assertIn("已声明", details["config:hooks.pre_llm_call"])
+        self.assertIn("已有", details["allowlist:已同意"])
+
+    def test_failure_details_still_say_what_is_missing(self):
+        """改成成功文案不能把失败文案弄丢：红了还是得说清哪里缺。"""
+        (self.home / "hermes-agent" / "agent" / "turn_context.py").write_text(
+            "nothing" + chr(10), encoding="utf-8")
+        self.assertEqual(self.run_check().returncode, 2)
+        failed = {c["check"]: c["detail"] for c in self.state_data()["checks"] if not c["ok"]}
+        self.assertIn("找不到", failed["source:上下文注入点"])
+
+
 if __name__ == "__main__":
     unittest.main()

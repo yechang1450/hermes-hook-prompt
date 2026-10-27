@@ -307,11 +307,62 @@ class LogPrivacyCase(Base):
         self.assertIn("inject", text)       # 注入本身照常
 
 
+class ReportPreviewCase(Base):
+    """P1：hud_report.py 预览当前面板时也不能跟随软链、不能对目录抛 traceback。"""
+
+    def report(self):
+        return subprocess.run([PY, str(self.dir / "hud_report.py")],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=self.env(), cwd=str(self.dir), timeout=120)
+
+    def write_log(self):
+        self.log.write_text(
+            "2026-10-27T10:00:00+08:00 inject session=a profile=default chars=100 entries=1/1\n",
+            encoding="utf-8")
+
+    def test_report_refuses_symlink_panel_preview(self):
+        self.write_log()
+        victim = self.victim("SECRET-1\nSECRET-2\nSECRET-3\nSECRET-4\n")
+        self.symlink(self.panel, victim)
+        r = self.report()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("SECRET-", r.stdout)      # 仓外文件内容一个字都不能打出来
+        self.assertIn("符号链接", r.stdout)
+
+    def test_report_directory_panel_is_clean(self):
+        self.write_log()
+        self.panel.mkdir()
+        r = self.report()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("不是普通文件", r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_report_still_previews_regular_panel(self):
+        self.write_log()
+        self.write_panel()
+        r = self.report()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("当前面板", r.stdout)
+        self.assertIn("session_id: any", r.stdout)
+
+
+def _synthetic(day: str, tail: str) -> str:
+    """拼合成会话 id：拆两段写，守卫文件自己不出现完整 id（否则扫到自己就把白名单当残留）。"""
+    return day + "_000000_" + tail
+
+
 class PublicRepoCase(unittest.TestCase):
     """M8：公开仓里只能出现合成会话 id（不把真 id 写进测试本身）。"""
 
     SYNTHETIC = "20260101_000000_abcdef"
     SID_RE = re.compile(r"\b20\d{6}_\d{6}_[0-9a-f]{6}\b")
+    # tests/ 里已有的合成 id：历史残留只登记、不改写，新增测试只能用这些或新的合成值
+    TEST_RESIDUE = {
+        "test_fs_safety.py": {_synthetic("20260101", "abc" "def")},
+        "test_hardening.py": {_synthetic("20260101", "abc" "def")},
+        "test_hud.py": {_synthetic("20260101", "aaa" "aaa"), _synthetic("20260102", "bbb" "bbb")},
+        "test_selfcheck.py": {_synthetic("20260101", "abc" "def")},
+    }
 
     def test_only_synthetic_session_ids_in_shipped_docs(self):
         files = [p for p in REPO.glob("*.py")] + [p for p in REPO.glob("*.md")]
@@ -323,6 +374,20 @@ class PublicRepoCase(unittest.TestCase):
                 found[path.name] = hits
         self.assertEqual(found, {"README.md": {self.SYNTHETIC},
                                  "hud_panel.py": {self.SYNTHETIC}})
+
+    def test_only_known_synthetic_session_ids_in_tests(self):
+        """tests/ 也要扫：真 id 粘进测试同样会进公开仓（只扫仓库根会漏掉）。"""
+        files = sorted(p for p in (REPO / "tests").rglob("*")
+                       if p.is_file() and p.suffix in {".py", ".md"})
+        self.assertTrue(files, "tests/ 扫不到文件，守卫形同虚设")
+        unexpected = {}
+        for path in files:
+            hits = set(self.SID_RE.findall(path.read_text(encoding="utf-8", errors="replace")))
+            extra = hits - self.TEST_RESIDUE.get(path.name, set())
+            if extra:
+                unexpected[path.name] = extra
+        self.assertEqual(unexpected, {},
+                         "tests 里出现了未登记的会话 id：换合成 id，或登记进 TEST_RESIDUE 并注明来源")
 
     def test_example_uses_synthetic_id(self):
         text = (REPO / "hud_panel.py").read_text(encoding="utf-8")

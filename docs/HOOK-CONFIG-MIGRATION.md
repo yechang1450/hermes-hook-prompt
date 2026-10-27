@@ -34,6 +34,15 @@ H="${HERMES_HOME:-$LOCALAPPDATA/hermes}"        # 按上表确认实际值
 cp "$H/config.yaml"                  "$H/config.yaml.pre-hook-migration"
 cp "$H/shell-hooks-allowlist.json"   "$H/shell-hooks-allowlist.json.pre-hook-migration"
 
+# 其余 16 档各自的配置与 allowlist 也要备份：config.yaml 是**按档分开存**的，
+# 只备 default 那份，回滚时第 2–17 档就回不去（迁移改了 17 档，回滚也得覆盖 17 档）
+for p in $(ls "$H/profiles"); do
+  d="$H/profiles/$p"
+  [ -f "$d/config.yaml" ]                && cp "$d/config.yaml"                "$d/config.yaml.pre-hook-migration"
+  [ -f "$d/shell-hooks-allowlist.json" ] && cp "$d/shell-hooks-allowlist.json" "$d/shell-hooks-allowlist.json.pre-hook-migration"
+done
+ls "$H"/profiles/*/*.pre-hook-migration | wc -l   # 期望 = 有配置的档数 × 2
+
 # 17 档现状全量存档（回滚要用原始串，allowlist 是精确比对的）
 hermes config get hooks > hook-config-before.txt
 for p in $(ls "$H/profiles"); do
@@ -150,28 +159,51 @@ for p in $(ls "$H/profiles"); do hermes -p "$p" --accept-hooks -z "ok"; done
 
 ## 八、6. 回滚
 
-按代价从小到大，任选其一：
+按代价从小到大，任选其一。**三种都要覆盖 17 档（default + 16 个 profile）**：迁移是逐档改的，
+只回 default 会让其余 16 档继续跑新命令。
 
 1. **只回命令串**（脚本先不动）：
 
 ```bash
-hermes -p <档> config set --force hooks.pre_llm_call \
+# default
+hermes config set --force hooks.pre_llm_call \
   '[{"command":"python <旧目录>/hud_inject.py","timeout":10}]'
+
+# 其余 16 档：档名从 profiles 目录取，与第五节清单逐一核对
+for p in $(ls "$H/profiles"); do
+  hermes -p "$p" config set --force hooks.pre_llm_call \
+    '[{"command":"python <旧目录>/hud_inject.py","timeout":10}]'
+done
 ```
 
-旧 `(event, command)` 在 allowlist 里还在 → **不用**重新同意。回滚完照第七节第 3 步看 `hud.log` 恢复 `inject`。
+旧 `(event, command)` 在 allowlist 里还在 → **不用**重新同意。回滚完照第七节第 3 步**逐档**看
+`hud.log` 恢复 `inject`（default 绿、16 档没绿就是漏回了）。
 
-2. **整份还原配置与 allowlist**：
+2. **整份还原配置与 allowlist**（用第 0 节的逐档备份）：
 
 ```bash
+# default
 cp "$H/config.yaml.pre-hook-migration" "$H/config.yaml"
 cp "$H/shell-hooks-allowlist.json.pre-hook-migration" "$H/shell-hooks-allowlist.json"
-hermes config get hooks        # 逐档复核
+
+# 其余 16 档（某档第 0 节没备份到的，别硬还原，改回第 1 种方式逐档恢复）
+for p in $(ls "$H/profiles"); do
+  d="$H/profiles/$p"
+  [ -f "$d/config.yaml.pre-hook-migration" ]                && cp "$d/config.yaml.pre-hook-migration"                "$d/config.yaml"
+  [ -f "$d/shell-hooks-allowlist.json.pre-hook-migration" ] && cp "$d/shell-hooks-allowlist.json.pre-hook-migration" "$d/shell-hooks-allowlist.json"
+done
+
+hermes config get hooks                        # default 复核
+for p in $(ls "$H/profiles"); do               # 16 档逐一复核命令串 + timeout
+  printf '\n== %s ==\n' "$p"
+  hermes -p "$p" config get hooks
+done
 ```
 
 3. **连脚本一起回**：`cp -a "<旧目录>.bak-<时间>"/* "<旧目录>/"`（迁移期间没删过旧目录，通常用不上）。
 
-回滚验收与第七节同一张清单。确认新路径跑满一周再归档旧目录，别提前删。
+回滚验收与第七节同一张清单（**17/17**，含 16 个 profile 的 `config get hooks` 与 `hud.log`）。
+三种回滚都只覆盖「命令串 + 配置 + allowlist」，不碰面板与快照；确认新路径跑满一周再归档旧目录，别提前删。
 
 ## 九、本次（W4）没做的事
 
