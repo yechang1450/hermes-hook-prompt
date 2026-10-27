@@ -431,6 +431,31 @@ _HOOK_CMD_RE = re.compile(r"command\s*:\s*[\"']?([^\"',}\]]+)")
 _HUD_INJECT_RE = re.compile(r"(?<![\w.-])hud_inject\.py(?![.\w-])")
 
 
+def _strip_yaml_comment(value: str) -> str:
+    """去掉 YAML 行内注释；引号内的 # 保留。"""
+    out: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for ch in value:
+        if quote:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\" and quote == '"':
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            continue
+        if ch == "#" and (not out or out[-1].isspace()):
+            break
+        out.append(ch)
+    return "".join(out).strip()
+
+
 def _is_hud_inject_command(cmd: str) -> bool:
     """命令里必须出现**完整的** `hud_inject.py`；`.bak`/`.py.old` 等变体不算。"""
     return bool(_HUD_INJECT_RE.search(cmd))
@@ -440,7 +465,11 @@ def _hook_commands_in(text: str) -> list[str]:
     """从一段 YAML/行内文本里取 `command: …`；只认指向 hud_inject.py 的条目。"""
     if "hud_inject" not in text:
         return []
-    return [cmd.strip() for cmd in _HOOK_CMD_RE.findall(text) if _is_hud_inject_command(cmd)]
+    return [
+        _strip_yaml_comment(cmd).strip()
+        for cmd in _HOOK_CMD_RE.findall(text)
+        if _is_hud_inject_command(_strip_yaml_comment(cmd))
+    ]
 
 
 def hook_commands(config_text: str, event: str = HOOK_EVENT) -> list[str]:
