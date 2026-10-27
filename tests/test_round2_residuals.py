@@ -447,6 +447,7 @@ class HookParserCase(Base):
             "1. ㊙scope: profile:ceo 机密XYZ",
             "1. ѕсоре: profile:ceo 机密XYZ",
             "1. 1️⃣scope: profile:ceo 机密XYZ",
+            "1. ①1️⃣scope: profile:ceo 机密XYZ",
             "1. [ϲcope: profile:ceo] MARK",
             "1.〈scope: profile:ceo〉 机密XYZ",
         ):

@@ -239,7 +239,7 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
         if not (folded_first.isascii() and folded_first.isalpha()):
             return None
     # 键帽（1️⃣）是 ASCII 数字 + VS16 + U+20E3：整组剥掉再扫。
-    original = re.sub(r"^[0-9](?:\ufe0f|\u20e3)+\s*", "", original)
+    original = re.sub(r"[0-9](?:\ufe0f|\u20e3)+\s*", "", original)
     # 任何“括号开头 + 前 64 字内有冒号”的行都按标签处理：同形字/异体括号
     # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
     head = unicodedata.normalize("NFKC", original[:64])
