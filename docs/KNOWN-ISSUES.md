@@ -39,8 +39,8 @@ CI 矩阵：`ubuntu-latest` / `windows-latest` × Python 3.10 / 3.12，4/4 绿�
 
 ### 3. 注入块 1600 字硬截断
 
-- `hud_inject.py` 对整块（标题行 + 正文 + 尾行）超过 `MAX_CHARS=1600` 时截断并追加「…（面板过长已截断）」。
-- 截断**不会**静默丢：`hudctl check` 报「整块约 N 字」的状态提示，`set` 直接拒绝正文 >1600 字。整块 1500–1600 之间仍可能被截掉尾行，属预期。
+- `hud_inject.py` 对整块（标题行 + 正文 + 尾行）超过 `MAX_CHARS=1600` 时**只截正文**，追加「…（面板过长已截断）」；尾行的「执行机制建议 + 自检警告」先留预算、永远保留（旧实现从尾部整块切，面板一长，最该看见的提醒最先消失）。
+- 截断**不会**静默丢：`hudctl check` 报「整块约 N 字」的状态提示，`set` 直接拒绝正文 >1600 字。
 - 面板正常用法（一两百字）碰不到这条。
 
 ### 4. `impact` / `sessions` 在库被写时可能「读不到」
@@ -90,6 +90,11 @@ CI 矩阵：`ubuntu-latest` / `windows-latest` × Python 3.10 / 3.12，4/4 绿�
   修法：该分支**直接返回空串**，是否存在/是否普通文件交给后续 `open()`/`fstat()`。
   回归：`tests/test_fs_safety.py::LockCreateRaceCase`（mock `lstat` 抛 `FileNotFoundError` + `lexists` 返回 True，断言返回空串且**根本不查** `lexists`）+ `tests/test_hardening.py::test_concurrent_scope_updates_under_double_contention`（12 进程抢新建锁，每条目两个写者写同值，终态断言不放松）。
 - **真实会话 id 进了公开仓测试**：`tests/test_reverse_audit.py` 里 28 字真实 id 已换成同长度合成 id；`git grep -nE '[0-9]{8}_[0-9]{6}_[0-9a-f]{6}'` 只剩 `20260101*` / `20260102*` 合成值。
+- **管理端读面板/快照没有归一 CRLF/双 CR**（第二轮复审 P2）：`check`/`restore` 用 `Path.read_text()`，通用换行转换把旧版叠出的 `CR CR LF` 先拆成两个换行，头部因此多出空行——`check` 假红「缺 expires_at/title/enabled」，`restore` 拒收合法快照。修法：统一走 `_read_text_exact()`（`newline=""` 保留原样）再 `_normalize_newlines`。回归：`tests/test_round2_residuals.py::DoubleCrHeaderCase`。
+- **`selfcheck` 的 config/allowlist 是子串判定**（P2）：`hud_inject.py` 只挂在 `pre_tool_call`、`pre_llm_call` 挂别人时仍报 `ok: true`。修法：解析收进 `hud_panel.hook_commands()` / `approved_commands()`（按 `pre_llm_call` 事件域 + 精确命令），hudctl 与 selfcheck 共用一份；支持块写法、行内写法与任意合法缩进。回归：`tests/test_round2_residuals.py::SelfcheckEventDomainCase` / `HookParserCase`。
+- **`hud.log` 可被 payload 换行注入伪造行**（P3）：`session_id` / `profile` 原样落盘，塞 `\n` 就能伪造一条 `inject … entries=9/9`。修法：`log()` 唯一写入口把控制符/换行折叠成空格（含 ESC），一条日志永远一行。回归：`LogSanitizeCase`。
+- **`hudctl scope` 改写双标注条目会吃掉续行缩进**（P3）：`   [scope: all] - 续行` 去标签后顶格成 `- 续行`，下一次解析变成新条目（内容被提升、作用域另算）。修法：`hud_panel.strip_leading_scope()` 保留原缩进，注入端/`entry_texts`/`scope` 共用。回归：`ScopeIndentCase`。
+- **截断吃掉尾行的自检警告**（P3）：先拼整块再切前 1600 字，面板一长「⚠ 机制未自检 / 已更新」与「执行机制建议」正好被切掉。修法：`_compose_block()` 先给尾行留预算，只截正文并补截断标记。回归：`TruncationCase`。
 
 ## 历史残留（不阻塞）
 

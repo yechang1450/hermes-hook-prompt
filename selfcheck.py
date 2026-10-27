@@ -208,14 +208,19 @@ def check() -> tuple[list[dict], bool, list[str]]:
             "agent/turn_context.py 仍把 hook 返回值注入 plugin_user_context")
 
     cfg = _read(PROFILE_DIR / "config.yaml")
-    has_hook = "pre_llm_call" in cfg and "hud_inject.py" in cfg
-    add("config:hooks.pre_llm_call", has_hook, f"{PROFILE_DIR / 'config.yaml'} 缺声明的钩子",
-        f"已声明：{PROFILE_DIR / 'config.yaml'} → hud_inject.py")
+    declared = hud_panel.hook_commands(cfg) if hud_panel is not None else []
+    add("config:hooks.pre_llm_call", bool(declared),
+        f"{PROFILE_DIR / 'config.yaml'} 缺 pre_llm_call 事件下指向 hud_inject.py 的声明"
+        "（只声明在 pre_tool_call 等其它事件下不算数）",
+        f"已声明：{PROFILE_DIR / 'config.yaml'} → hud_inject.py（pre_llm_call 事件下）")
 
     allow = _read(PROFILE_DIR / "shell-hooks-allowlist.json")
-    approved = "pre_llm_call" in allow and "hud_inject.py" in allow
-    add("allowlist:已同意", approved, "该档没有 hud_inject.py 的 pre_llm_call 批准记录",
-        "该档已有 hud_inject.py 的 pre_llm_call 批准记录")
+    approved_cmds = hud_panel.approved_commands(allow) if hud_panel is not None else set()
+    approved = any(cmd in approved_cmds for cmd in declared)
+    add("allowlist:已同意", approved,
+        "该档没有 hud_inject.py 在 pre_llm_call 事件下的批准记录"
+        "（pre_tool_call 等其它事件下的批准不算）",
+        "该档已有 hud_inject.py 在 pre_llm_call 事件下的批准记录")
 
     ok_e2e, detail_e2e = _e2e()
     add("e2e:注入返回 context", ok_e2e, detail_e2e)

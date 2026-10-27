@@ -96,7 +96,7 @@ enabled: true                                  # off 即暂停，不用删配置
 （空行之后是正文，原样注入）
 ```
 
-正文建议控制在 **1200 字以内**（注入块硬上限 1600 字：标题行 + 正文 + 注入尾行，超出截断）。按 ¥2/百万 token 粗算，1200 字约 720–840 token ≈ **¥0.0014–0.0017/轮**；另外每轮多一次 Python 启动，本机 5 次实测 0.15–0.6 s，中位约 0.2 s（慢盘/杀软下更久）。
+正文建议控制在 **1200 字以内**（注入块硬上限 1600 字：标题行 + 正文 + 注入尾行；超出时只截正文，尾行的执行机制建议与自检警告始终保留）。按 ¥2/百万 token 粗算，1200 字约 720–840 token ≈ **¥0.0014–0.0017/轮**；另外每轮多一次 Python 启动，本机 5 次实测 0.15–0.6 s，中位约 0.2 s（慢盘/杀软下更久）。
 
 ### 3.1 作用范围：默认全部（含以后新建的会话）
 
@@ -122,6 +122,7 @@ enabled: true                                  # off 即暂停，不用删配置
 - **标注非法 = 对谁都不生效**（fail-closed），不会退化成“全员可见”；`check` 会把它报出来，注入日志带 `invalid_scope=N`。半个 token（`[scope: session:A profile:p]`）同样判非法，不会把 `profile:p` 当成会话 id。
 - **标注也可以写在续行行首**（缩进不限），算这一条的；同一 entry 写**两处及以上**（首行一处 + 续行，或续行里两处）会被扫**整条**发现 → 整条失效（不注入），`check` 报错并列出冲突的几处标注。旧实现只看第一处，第二条标注会当正文注进上下文而 check 还是绿的。
 - **续行行首的标注只有写得合法才算标注**：`[scope: session 123]` 这种解析不了的，按普通正文原样保留（不会被删、也不会连带整条失效），`check` 单独告警「续行标注非法」。
+- **用 `scope` 改写带两处标注的条目时，续行只删标注、保留原缩进**：缩进被吃掉会让 `- 续行` 顶格变成新条目（内容被“提升”出来、作用域另算）。
 - **写了 `[scope:]` 却没有任何可识别条目**（例如整块缩进成段落）：整块不注入（绝不把带标签的原文广播给所有会话），`check` 报格式错。
 - 条目必须**顶格**写；缩进行算上一条的续行，不会被当成新条目。
 - 第一个条目之前的标题/前言（如 `## 硬约束`）原样保留；代码围栏里的编号不算条目。
@@ -191,8 +192,9 @@ python hudctl.py use "<id|标题关键字>" --ttl 8h   # 把面板挂到某个�
 
 `restore` 写入前会先按 `check` 的同一套规则验快照内容：缺元数据、头部未知键、围栏未闭合、作用域非法、
 正文为空、`enabled` 非法等一律 **exit 2 且不动现网面板**（也不生成 pre-restore）；坏快照不能把现网面板一起写坏。
+面板与快照都按**原始行尾**读入再统一归一（`newline=""` + 一串 CR 只算一个换行）：旧版写出的双 CR 头部不会被 `check` 误报成缺元数据，也不会让 `restore` 拒收合法快照。
 
-`hud_report.py` 读 `hud.log`，按档统计注入与跳过（过期、会话不匹配、关闭），并汇总**作用域过滤**（多少轮有条目被筛掉、`invalid_scope` 次数），格式不识别的行会单独计数提示（不再静默丢弃）：
+`hud_report.py` 读 `hud.log`，按档统计注入与跳过（过期、会话不匹配、关闭），并汇总**作用域过滤**（多少轮有条目被筛掉、`invalid_scope` 次数），格式不识别的行会单独计数提示（不再静默丢弃）。日志写盘前会把控制符与换行折叠成空格：payload 的 `session_id` / `profile` 里塞换行也伪造不出一整行假记录，一条注入仍只占一行。
 
 ```bash
 python hud_report.py --since 2026-10-22
@@ -208,7 +210,7 @@ Hermes 更新后，钩子实现可能换文件（本机 10-23 的更新就把 `p
 python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 ```
 
-查七项：模块（`hud_panel.py` 在不在）、事件还在不在、注入点还在不在、本档 config 声明、allowlist 同意、端到端注入、面板格式。
+查七项：模块（`hud_panel.py` 在不在）、事件还在不在、注入点还在不在、本档 config 声明、allowlist 同意、端到端注入、面板格式。config / allowlist 两项按 **`pre_llm_call` 事件域**判定：`hud_inject.py` 只挂在 `pre_tool_call`、或 `pre_llm_call` 下挂的是别的脚本，都算「未声明 / 未同意」（旧实现只做子串判断，会假绿）。
 
 三条口径很重要（都是防假红）：
 
@@ -242,13 +244,13 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-196 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+214 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行尾归一（CRLF 正文、stdin、旧版双 CR 面板） / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符/整块估长含尾行与余量）/ UTC 到期按本地显示 / `preview` 条目 diff 按完整正文（重复按次数计）/ 报告统计与参数校验；外加 13 项防假红与 fail-closed 回归（见 `tests/test_hardening.py`：自检不用现网面板判定、缺解析器/围栏未闭合不原样注入、空 `session_id` 不注入且 check 判错、restore 前自动备份且拍不成拒绝恢复、prune 默认只列清单与 `--yes`、`on --ttl`、头部未知键 fail-closed、续行 scope、`set` 写入校验、状态原子写与 `status: error`、内容哈希指纹、面板大小上限与并发锁、`parse_scope` 半个 token 与 `use` 精确匹配不限 300 条）。作用域冲突回归见 `tests/test_scope.py::ConflictCase`：续行两处标注判冲突（整条不注入、标注不进上下文、`check` 报「写了两处标注」）、首行 + 两处续行按 3 处计、单处续行标注行为不变。反向审查 10 项回归见 `tests/test_reverse_audit.py`：profile 家目录自检不红、找不到源码只作 notice、指纹与档无关、尾行按 panel/source 分类措辞、1403 字正文 + 28 字会话 id 可保存、零条目带 `[scope:]` fail-closed、续行非法标注保留原文、`restore --file` 与非法快照拒绝、超大面板可被 `set` 覆盖、`enabled` 白名单；另有 `scope` 只删行首标签、锁路径/快照目录类型、snapshot glob 过滤目录。安全审计回归见 `tests/test_fs_safety.py`：预置软链 tmp/锁不跟随且受害文件不被写、管理端读路径（status/impact/set/snapshot/restore）拒绝软链面板与软链快照、会话标题剥 ANSI/C0、`HUD_LOG_SESSIONS=0` 日志只记会话 id 哈希、公开仓无真实会话 id（守卫扫仓库根 + `tests/**/*.py`，历史残留只登记、不改写）；`hud_report` 预览拒绝软链/目录面板、`selfcheck` 成功时 detail 写成功文案；并发建锁不被误判成「重解析点」（`lstat` 报缺文件时直接放行给 `open`/`fstat`，mock 钉死两个系统调用 + 12 进程抢新建锁，见 `LockCreateRaceCase` 与 `test_concurrent_scope_updates_under_double_contention`）。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。
+覆盖：注入 / 关闭 / 过期 / 会话不匹配 / Z 后缀 / BOM / 行尾归一（CRLF 正文、stdin、旧版双 CR 面板） / 行内注释 / 前导空行 / 坏 payload / 非法 UTF-8 / 面板缺失 / 符号链接拒绝 / 截断 / 日志轮转与轮转后统计 / `hudctl` 开关、快照、跨档会话列表与挂载 / 路径穿越拒绝 / 面板自检（含重复键/控制字符/整块估长含尾行与余量）/ UTC 到期按本地显示 / `preview` 条目 diff 按完整正文（重复按次数计）/ 报告统计与参数校验；外加 13 项防假红与 fail-closed 回归（见 `tests/test_hardening.py`：自检不用现网面板判定、缺解析器/围栏未闭合不原样注入、空 `session_id` 不注入且 check 判错、restore 前自动备份且拍不成拒绝恢复、prune 默认只列清单与 `--yes`、`on --ttl`、头部未知键 fail-closed、续行 scope、`set` 写入校验、状态原子写与 `status: error`、内容哈希指纹、面板大小上限与并发锁、`parse_scope` 半个 token 与 `use` 精确匹配不限 300 条）。作用域冲突回归见 `tests/test_scope.py::ConflictCase`：续行两处标注判冲突（整条不注入、标注不进上下文、`check` 报「写了两处标注」）、首行 + 两处续行按 3 处计、单处续行标注行为不变。反向审查 10 项回归见 `tests/test_reverse_audit.py`：profile 家目录自检不红、找不到源码只作 notice、指纹与档无关、尾行按 panel/source 分类措辞、1403 字正文 + 28 字会话 id 可保存、零条目带 `[scope:]` fail-closed、续行非法标注保留原文、`restore --file` 与非法快照拒绝、超大面板可被 `set` 覆盖、`enabled` 白名单；另有 `scope` 只删行首标签、锁路径/快照目录类型、snapshot glob 过滤目录。安全审计回归见 `tests/test_fs_safety.py`：预置软链 tmp/锁不跟随且受害文件不被写、管理端读路径（status/impact/set/snapshot/restore）拒绝软链面板与软链快照、会话标题剥 ANSI/C0、`HUD_LOG_SESSIONS=0` 日志只记会话 id 哈希、公开仓无真实会话 id（守卫扫仓库根 + `tests/**/*.py`，历史残留只登记、不改写）；`hud_report` 预览拒绝软链/目录面板、`selfcheck` 成功时 detail 写成功文案；并发建锁不被误判成「重解析点」（`lstat` 报缺文件时直接放行给 `open`/`fstat`，mock 钉死两个系统调用 + 12 进程抢新建锁，见 `LockCreateRaceCase` 与 `test_concurrent_scope_updates_under_double_contention`）。GitHub Actions 在 Ubuntu + Windows、Python 3.10/3.12 上跑同一套。第二轮复审残留见 `tests/test_round2_residuals.py`（18）：双 CR 头部的 `check`/`restore`、selfcheck 按 `pre_llm_call` 事件域判 config/allowlist（块写法、4 空格缩进与行内写法仍绿）、`hud.log` payload 换行/控制符折叠、`scope` 改写保留续行缩进、截断保留尾行警告与执行机制建议。
 
 ## 八、边界与安全（先说清楚）
 
@@ -274,7 +276,7 @@ python -m unittest discover -s tests -v
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
 | `docs/KNOWN-ISSUES.md` | 已知问题：P0/P1 判级口径、当前清单（P0/P1 均为 0）、已修复与历史残留 |
 | `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移 runbook：裸 `python` → 绝对解释器、`temp/hud/` → 仓库路径、17 档逐档清单与回滚（**未执行**） |
-| `tests/` | 单元测试（标准库 unittest，共 196）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（14）、`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判） |
+| `tests/` | 单元测试（标准库 unittest，共 214）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（14）、`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（18：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 

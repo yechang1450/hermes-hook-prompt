@@ -194,6 +194,17 @@ def _normalize_newlines(text: str) -> str:
     return re.sub(r"\r+\n|\r+", "\n", text) if "\r" in text else text
 
 
+def _read_text_exact(path: Path) -> str:
+    r"""按原样读文本：`newline=""` 保留原始行尾，交给 _normalize_newlines 统一。
+
+    不能用 `Path.read_text()`：它默认做通用换行转换，会把旧版叠出来的 `\r\r\n`
+    先拆成两个 `\n`——之后再归一已经无从区分，头部因此多出一个空行
+    （check 假红、restore 拒收合法快照）。读面板与读快照都必须走这里。
+    """
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
 def _strip_comment(value: str) -> str:
     if hud_panel is not None:
         return hud_panel.strip_comment(value)
@@ -270,9 +281,8 @@ def read_panel_ex(create: bool = True, head_only: bool = False) -> tuple[dict[st
                 f"面板过大（{size} 字节 > {MAX_PANEL_READ_BYTES}）：拒绝整份读取 {PANEL}；"
                 "要换掉它用 set --body <文件>（set 只读头部，可整份覆盖）")
         try:
-            # newline=""：保留原始行尾，交给 hud_panel.normalize_newlines 统一（`\r\r\n` 只算一个换行）
-            with PANEL.open("r", encoding="utf-8", newline="") as fh:
-                raw = fh.read()
+            # 读原样行尾（一串 CR 只算一个换行）：归一交给 normalize_newlines
+            raw = _read_text_exact(PANEL)
         except UnicodeDecodeError:
             raise SystemExit(f"面板不是合法 UTF-8：{PANEL}")
     return _split_panel_ex(raw.lstrip("\ufeff"))
@@ -479,62 +489,30 @@ def _profile_allow(profile: str) -> Path:
 
 
 def _hook_commands(profile: str) -> list[str]:
-    """config 里 **pre_llm_call 事件下**、未注释的、command 指向 hud_inject 的命令。
+    r"""config 里 **pre_llm_call 事件下**、未注释的、command 指向 hud_inject 的命令。
 
-    要跟事件走：只声明在 pre_tool_call 下的命令不算数（否则陈旧配置会假装生效）。
-    同时支持块写法与 `pre_llm_call: [{command: …}]` 行内写法。
+    解析只在 hud_panel 里实现一份（hudctl 与 selfcheck 共用）：只声明在
+    pre_tool_call 下的命令不算数（否则陈旧配置会假装生效），行内写法同样认。
+    缺 hud_panel 时不猜：返回空（宁可报「没声明」，也不把别的钩子当成本钩子）。
     """
     try:
         text = _profile_cfg(profile).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    out: list[str] = []
-    event: str | None = None
-    in_hooks = False
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if re.match(r"^hooks:\s*$", line):
-            in_hooks, event = True, None
-            continue
-        if in_hooks and not line[:1].isspace():
-            in_hooks, event = False, None  # 回到顶层键，hooks 段结束
-        if not in_hooks:
-            continue
-        m_event = re.match(r"^\s{2}([A-Za-z_][\w]*):", line)
-        if m_event:
-            event = m_event.group(1)
-            if event == "pre_llm_call" and "hud_inject" in stripped:
-                # 行内写法：pre_llm_call: [{command: python …}]
-                for cmd in re.findall(r"command\s*:\s*[\"']?([^\"',}\]]+)", stripped):
-                    out.append(cmd.strip())
-            continue
-        if event != "pre_llm_call" or "hud_inject" not in stripped:
-            continue
-        m = re.search(r"command:\s*[\"']?(.+?)[\"']?\s*$", stripped)
-        if m:
-            out.append(m.group(1).strip())
-    return out
+    if hud_panel is None:
+        return []
+    return hud_panel.hook_commands(text)
 
 
 def _allowed_commands(profile: str) -> set[str]:
     """allowlist 里 pre_llm_call 且指向 hud_inject 的命令（精确字符串，与 Hermes 同口径）。"""
     try:
-        data = json.loads(_profile_allow(profile).read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError):
+        text = _profile_allow(profile).read_text(encoding="utf-8", errors="replace")
+    except OSError:
         return set()
-    out = set()
-    for entry in (data.get("approvals") or []) if isinstance(data, dict) else []:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("event") != "pre_llm_call":
-            continue
-        command = str(entry.get("command") or "").strip()
-        if "hud_inject" in command:
-            out.add(command)
-    return out
+    if hud_panel is None:
+        return set()
+    return hud_panel.approved_commands(text)
 
 
 def _hook_state(profile: str) -> tuple[bool, bool]:
@@ -947,8 +925,9 @@ def cmd_scope(args) -> int:
             line = lines[idx]
             if idx in drop:
                 # 续行上被认作标注的**每一处**都清掉：只清第一处，第二处仍会让整条失效
-                line = hud_panel.SCOPE_RE.sub("", line, count=1).rstrip()
-                if not line.strip():
+                # 用 hud_panel 的同一实现：保留原缩进，避免 `- 续行` 顶格后变成新条目
+                line = hud_panel.strip_leading_scope(line)
+                if not line:
                     continue
             block.append(line)
         lines[item["start"]:item["end"]] = block
@@ -1224,7 +1203,7 @@ def cmd_check(args) -> int:
               f"（可用 set --body <文件> 整份覆盖；本命令只读头部）")
         return 1
     try:
-        raw = PANEL.read_text(encoding="utf-8")
+        raw = _read_text_exact(PANEL)
     except UnicodeDecodeError:
         print(f"✗ 面板不是合法 UTF-8：{PANEL}")
         return 1
@@ -1460,7 +1439,7 @@ def cmd_restore(args) -> int:
     if unsafe:
         _die(f"快照{unsafe}，拒绝恢复：{target}")
     try:
-        text = target.read_text(encoding="utf-8")
+        text = _read_text_exact(target)
     except UnicodeDecodeError:
         raise SystemExit(f"快照不是合法 UTF-8：{target}")
     except OSError as exc:

@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 
@@ -276,9 +277,24 @@ def scope_matches(scope, session_id: str, profile: str) -> bool:
     return False
 
 
-def _strip_leading_scope(line: str) -> str:
-    """去掉行首的 [scope: …]；整行只有标注时返回空串。"""
-    return SCOPE_RE.sub("", line, count=1).rstrip()
+def strip_leading_scope(line: str) -> str:
+    r"""去掉行首的 [scope: …]，**保留原缩进**；整行只有标注时返回空串。
+
+    SCOPE_RE 的 `^\s*` 与 `]\s*` 会把缩进一起吃掉：续行 `   [scope: all] - x`
+    去标签后顶格成 `- x`，下一次解析就成了一个新条目（内容被「提升」出来、
+    作用域另算）。所以这里把原缩进补回去。
+    """
+    if not SCOPE_RE.match(line):
+        return line.rstrip()
+    stripped = SCOPE_RE.sub("", line, count=1).rstrip()
+    if not stripped.strip():
+        return ""
+    indent = line[: len(line) - len(line.lstrip())]
+    return indent + stripped
+
+
+# 旧名保留：外部/测试可能按私有名引用
+_strip_leading_scope = strip_leading_scope
 
 
 def filter_body(body: str, session_id: str, profile: str,
@@ -311,7 +327,7 @@ def filter_body(body: str, session_id: str, profile: str,
         for idx in range(item["start"] + 1, item["end"]):
             line = lines[idx]
             if idx == item["scope_line"]:
-                line = _strip_leading_scope(line)
+                line = strip_leading_scope(line)
                 if not line.strip():
                     continue   # 整行只有标注 → 丢掉，不留空行
             cleaned.append(line)
@@ -338,7 +354,7 @@ def entry_texts(body: str) -> list[str]:
         for idx in range(item["start"] + 1, item["end"]):
             line = block[idx - item["start"]]
             if idx == item["scope_line"]:
-                line = _strip_leading_scope(line)
+                line = strip_leading_scope(line)
                 if not line.strip():
                     continue
             tail.append(line.rstrip())
@@ -403,6 +419,89 @@ def validate(body: str) -> list[str]:
             if hits:
                 warns.append(f"条目「{line.strip()[:20]}…」的标注不在行首，注入时不会生效也不会被删掉")
     return warns
+
+
+# --------------------------------------------------------------------------- #
+# 钩子声明 / 同意（config.yaml 与 allowlist 的唯一解析；hudctl 与 selfcheck 共用）
+# --------------------------------------------------------------------------- #
+HOOK_EVENT = "pre_llm_call"
+_HOOK_CMD_RE = re.compile(r"command\s*:\s*[\"']?([^\"',}\]]+)")
+
+
+def _hook_commands_in(text: str) -> list[str]:
+    """从一段 YAML/行内文本里取 `command: …`；只认指向 hud_inject 的条目。"""
+    if "hud_inject" not in text:
+        return []
+    return [cmd.strip() for cmd in _HOOK_CMD_RE.findall(text)]
+
+
+def hook_commands(config_text: str, event: str = HOOK_EVENT) -> list[str]:
+    r"""config.yaml 里 **event 事件下**、未注释、command 指向 hud_inject 的命令。
+
+    必须跟着事件走：只声明在 `pre_tool_call` 下的同一条命令不算数（旧实现只做
+    「文件里同时出现 pre_llm_call 与 hud_inject.py」的子串判断，陈旧配置会假装生效）。
+    支持块写法（`pre_llm_call:` 下面若干 `- command: …`）与行内写法
+    （`pre_llm_call: [{command: …}]`）；hooks 子键的缩进按实际值判定，不硬编码两空格。
+    """
+    out: list[str] = []
+    in_hooks = False
+    base: int | None = None
+    current: str | None = None
+    for raw in normalize_newlines(config_text).splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if not in_hooks:
+            if re.match(r"^hooks:\s*(?:#.*)?$", line):
+                in_hooks, base, current = True, None, None
+            elif re.match(r"^hooks:\s*\{.*\}\s*(?:#.*)?$", line):
+                # 整段行内：hooks: {pre_llm_call: [{command: …}]}
+                body = line.split(":", 1)[1].strip().strip("{}")
+                m = re.match(rf"{re.escape(event)}\s*:\s*(.*)$", body)
+                if m:
+                    out.extend(_hook_commands_in(m.group(1)))
+            continue
+        if indent == 0:                 # 回到顶层键 → hooks 段结束
+            break
+        if base is None:
+            base = indent
+        if indent < base:
+            break
+        if indent == base and not stripped.startswith("-"):
+            m = re.match(r"([A-Za-z_][\w]*):\s*(.*)$", stripped)
+            current = m.group(1) if m else None
+            if current == event and m and m.group(2).strip():
+                out.extend(_hook_commands_in(m.group(2)))
+            continue
+        if current == event:
+            out.extend(_hook_commands_in(stripped))
+    return out
+
+
+def approved_commands(allowlist_text: str, event: str = HOOK_EVENT) -> set[str]:
+    """allowlist JSON 里 **event 事件下**、指向 hud_inject 的批准命令（精确字符串）。
+
+    只看事件域：`pre_tool_call` 下的批准不能让 `pre_llm_call` 报「已同意」——
+    那样钩子实际会被宿主静默跳过，而自检却是绿灯。
+    """
+    try:
+        data = json.loads(allowlist_text)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    out: set[str] = set()
+    for entry in data.get("approvals") or []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event") or "").strip() != event:
+            continue
+        command = str(entry.get("command") or "").strip()
+        if "hud_inject" in command:
+            out.add(command)
+    return out
 
 
 # --------------------------------------------------------------------------- #

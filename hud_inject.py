@@ -26,6 +26,7 @@ HUD_LOG_SESSIONS=0 时日志里的会话 id 只记 sha256 前 8 位（默认记�
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -51,8 +52,10 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 MAX_CHARS = 1600
+TRUNC_MARK = "\n…（面板过长已截断）"
 MAX_LOG_BYTES = 1_000_000
 MAX_PANEL_BYTES = 200_000  # 面板不该有这么大；上限防误放巨型文件
+LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]+")
 HERMES_HOME = (hud_panel.hermes_home() if hud_panel is not None
                else (os.environ.get("HERMES_HOME") or os.path.join(
                    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local"), "hermes")))
@@ -119,6 +122,16 @@ def _log_sid(session_id: str) -> str:
     return "#" + hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:8]
 
 
+def _one_line(text: str) -> str:
+    r"""日志行清洗：控制符（CR/LF/TAB、ESC 等）折叠成空格，一条日志永远只占一行。
+
+    session_id / profile 等字段直接来自宿主 payload：塞一个换行就能在 hud.log 里
+    伪造一整行（例如假的 `inject … entries=9/9`），把注入/跳过统计带偏，
+    也让人以为钩子跑过。清洗放在唯一的写入口，所有 log() 调用一并覆盖。
+    """
+    return LOG_CTRL_RE.sub(" ", str(text)).strip()
+
+
 def log(line: str) -> None:
     try:
         parent = os.path.dirname(LOG)
@@ -130,7 +143,7 @@ def log(line: str) -> None:
         except OSError:
             pass
         with open(LOG, "a", encoding="utf-8") as fh:
-            fh.write(f"{datetime.now(CST).isoformat(timespec='seconds')} {line}\n")
+            fh.write(f"{datetime.now(CST).isoformat(timespec='seconds')} {_one_line(line)}\n")
     except Exception:
         pass
 
@@ -185,6 +198,19 @@ def parse_panel(text: str):
                 continue
         break
     return meta, "\n".join(lines[body_start:]).strip()
+
+
+def _compose_block(prefix: str, body: str, suffix: str, limit: int = MAX_CHARS) -> str:
+    r"""拼注入块：超限只截正文，末尾的「执行机制建议 + 自检警告」永远留在块里。
+
+    旧实现先拼整块再取前 1600 字：面板一长，尾行的「⚠ 机制未自检 / Hermes 已更新」
+    正好被切掉——最该看见的提醒反而最先消失。这里先给尾行留预算，再截正文并补
+    截断标记；只有标题行+尾行本身就超限的极端面板才会略超上限（宁可留警告）。
+    """
+    if len(prefix) + len(body) + len(suffix) <= limit:
+        return prefix + body + suffix
+    room = max(0, limit - len(prefix) - len(suffix) - len(TRUNC_MARK))
+    return prefix + body[:room].rstrip() + TRUNC_MARK + suffix
 
 
 def main() -> int:
@@ -284,12 +310,12 @@ def main() -> int:
     hint = ("default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
             if who == "default" else
             f"{who} bot：优先用 OTUI（build/open-tui-orchestrator）")
-    block = f"[HUD·{title}] 生效至 {stamp}（{who}）\n{body}\n\n执行机制建议：{hint}"
+    prefix = f"[HUD·{title}] 生效至 {stamp}（{who}）\n"
+    suffix = f"\n\n执行机制建议：{hint}"
     note = _selfcheck_note()
     if note:
-        block += "\n" + note
-    if len(block) > MAX_CHARS:
-        block = block[:MAX_CHARS].rstrip() + "\n…（面板过长已截断）"
+        suffix += "\n" + note
+    block = _compose_block(prefix, body, suffix)
     log(f"inject session={_log_sid(session_id)} profile={profile} chars={len(block)} "
         f"entries={kept}/{total}" + (f" invalid_scope={bad_scopes}" if bad_scopes else ""))
     print(json.dumps({"context": block}, ensure_ascii=True))
