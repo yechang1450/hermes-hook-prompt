@@ -389,6 +389,9 @@ class HookParserCase(Base):
             "1. <scope: profile:ceo> 机密XYZ\n",
             "1. 「scope: profile:ceo」 机密XYZ\n",
             "1. ＜scope: profile:ceo＞ 机密XYZ\n",
+            "1. 〈scope: profile:ceo〉 机密XYZ\n",
+            "1. 〖scope: profile:ceo〗 机密XYZ\n",
+            "1. \u200bscope: profile:ceo 机密XYZ\n",
             "1. [scopes: profile:ceo] 机密XYZ\n",
             "1. scope: profile:ceo 机密XYZ\n",
             "1. scop: profile:ceo 机密XYZ\n",
@@ -398,10 +401,14 @@ class HookParserCase(Base):
             self.assertTrue(item["malformed_scope"], (body, item))
 
     def test_zero_entry_bare_scope_is_not_broadcast(self):
-        text, kept, total = self.hp.filter_body(
-            "scope: profile:ceo 机密XYZ", "S-BUILD", "build"
-        )
-        self.assertEqual((text, kept, total), ("", 0, 0))
+        for body in (
+            "scope: profile:ceo 机密XYZ",
+            "scope：profile:ceo 机密XYZ",
+            "〈scope: profile:ceo〉 机密XYZ",
+            "\u200bscope: profile:ceo 机密XYZ",
+        ):
+            text, kept, total = self.hp.filter_body(body, "S-BUILD", "build")
+            self.assertEqual((text, kept, total), ("", 0, 0), body)
 
     def test_fullwidth_closing_bracket_is_not_a_valid_tag(self):
         item = self.hp.entries("1. [scope: all］ 说明\n")[0]

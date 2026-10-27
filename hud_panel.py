@@ -38,7 +38,7 @@ INLINE_SCOPE_RE = re.compile(
     r"[\[［【（〔「『｛＜(<{]\s*scop\w*\b\s*:?[^\]］】）〕」』｝＞)>}]*[\]］】）〕」』｝＞)>}]?",
     re.IGNORECASE,
 )
-BARE_SCOPE_RE = re.compile(r"(?m)^\s*scop\w*\b\s*:", re.IGNORECASE)
+BARE_SCOPE_RE = re.compile(r"(?m)^\W*scop\w*\s*[:：]", re.IGNORECASE)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 META_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 # 会话 id / 档名允许的字符：字母数字开头，其余可用 _ . -
@@ -212,54 +212,32 @@ def degenerate_reason(body: str) -> str:
 
 
 def _loose_scope_at(text: str) -> tuple[str, bool] | None:
-    """只在**行首**（允许前导空白）识别 scope 标注，返回 (token, 是否标准写法)。
+    """行首 scope 标注探测（NFKC + 去格式字符 + 任意非单词前缀）。
 
-    NFKC 先把全角括号/全角字母折成 ASCII，再统一处理各种括号；
-    写法不完全标准也按“像标注”处理，由调用方 fail-closed。
+    不枚举括号族：任何标点前缀（含全角/异体括号）、零宽字符都先归一，
+    再看行首是否为 `scop... :`。写法不标准就返回 exact=False，交给调用方 fail-closed。
     """
     original = text.lstrip()
-    stripped = unicodedata.normalize("NFKC", original)
-    opens = "[(<{「『〔【（＜〈"
-    if not stripped.startswith(tuple(opens)):
-        # 无括号的 `scope: …` / `scopes: …` 在行首也算“像标注”。
-        bare = re.match(r"^scop\w*\b\s*:?\s*(.*)$", stripped, re.IGNORECASE)
-        if bare:
-            return bare.group(1).strip(), False
-        return None
-    normalized = (
-        stripped.replace("［", "[").replace("］", "]")
-        .replace("【", "[").replace("】", "]")
-        .replace("（", "[").replace("）", "]")
-        .replace("〔", "[").replace("〕", "]")
-        .replace("「", "[").replace("」", "]")
-        .replace("『", "[").replace("』", "]")
-        .replace("｛", "[").replace("｝", "]")
-        .replace("＜", "[").replace("＞", "]")
-        .replace("(", "[").replace(")", "]")
-        .replace("{", "[").replace("}", "]")
-        .replace("<", "[").replace(">", "]")
-        .replace("：", ":")
-    )
-    m = re.match(r"^\[\s*scop\w*\b\s*:?\s*(.*)$", normalized, re.IGNORECASE)
+    normalized = unicodedata.normalize("NFKC", original)
+    cleaned = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
+    m = re.match(r"^(\W*)(scop\w*)\s*:?\s*(.*)$", cleaned, re.IGNORECASE)
     if not m:
         return None
-    body = m.group(1)
-    token = body.split("]", 1)[0].strip()
-    # 起始括号决定配对的闭合括号：ASCII 标签后面出现 `［附件］` 不能截错。
-    close = {
-        "[": "]", "［": "］", "【": "】", "（": "）", "〔": "〕",
-        "「": "」", "『": "』", "｛": "｝", "＜": "＞", "(": ")",
-        "{": "}", "<": ">",
-    }.get(original[0], "]")
-    tag = original.split(close, 1)[0]
+    prefix, _word, body = m.group(1), m.group(2), m.group(3)
+    colon = ":" in cleaned[: len(cleaned) - len(body)]
+    # 裸词 `scope` 没有冒号、也没有标点前缀时是普通正文，不当作标注。
+    if not prefix and not colon:
+        return None
+    token = re.split(r"[\]\)\>»】〉」』｝〗〙❩⟧⦆]", body, maxsplit=1)[0].strip()
+    if not token:
+        return None
+    # 标准写法只认 ASCII `[scope: …]`：全角/异体括号一律按非法处理。
+    tag = original.split("]", 1)[0] if original.startswith("[") else original
     exact = (
         original.startswith("[")
+        and ":" in tag
+        and not any(ord(ch) > 127 for ch in tag)
         and bool(SCOPE_RE.match(normalized))
-        and not any(
-            ch in tag
-            for ch in ("［", "］", "【", "】", "（", "）", "〔", "〕", "「", "」",
-                       "『", "』", "｛", "｝", "＜", "＞", "(", ")", "{", "}", "<", ">", "：")
-        )
     )
     return token, exact
 
