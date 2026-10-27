@@ -372,6 +372,15 @@ class HookParserCase(Base):
         self.assertEqual(item["scope"], ("all", set()), item)
         self.assertFalse(item["malformed_scope"], item)
 
+    def test_missing_colon_or_chinese_brackets_fail_closed(self):
+        for body in (
+            "1. [scope profile:ceo] 机密XYZ\n",
+            "1. 【scope: profile:ceo】 机密XYZ\n",
+        ):
+            item = self.hp.entries(body)[0]
+            self.assertIsNone(item["scope"], (body, item))
+            self.assertTrue(item["malformed_scope"], (body, item))
+
     def test_fullwidth_closing_bracket_is_not_a_valid_tag(self):
         item = self.hp.entries("1. [scope: all］ 说明\n")[0]
         self.assertIsNone(item["scope"], item)
