@@ -586,7 +586,7 @@ def approved_commands(allowlist_text: str, event: str = HOOK_EVENT) -> set[str]:
         if str(entry.get("event") or "").strip() != event:
             continue
         command = str(entry.get("command") or "").strip()
-        if "hud_inject" in command:
+        if "hud_inject" in command.lower() and _is_hud_inject_command(command):
             out.add(command)
     return out
 

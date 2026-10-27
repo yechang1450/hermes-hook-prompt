@@ -388,6 +388,11 @@ class HookParserCase(Base):
         self.assertEqual(self.hp.approved_commands(data), {"python D:/x/hud_inject.py"})
         self.assertEqual(self.hp.approved_commands("{oops"), set())
         self.assertEqual(self.hp.approved_commands('["list"]'), set())
+        upper = json.dumps({"approvals": [
+            {"event": "pre_llm_call", "command": "python D:/x/HUD_INJECT.PY"},
+            {"event": "pre_llm_call", "command": "python D:/x/hud_inject.py.bak"},
+        ]})
+        self.assertEqual(self.hp.approved_commands(upper), {"python D:/x/HUD_INJECT.PY"})
 
 
 # --------------------------------------------------------------------------- #
