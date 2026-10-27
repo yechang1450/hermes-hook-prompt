@@ -230,10 +230,16 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     再看行首是否为 `scop... :`。写法不标准就返回 exact=False，交给调用方 fail-closed。
     """
     original = text.lstrip()
-    # 行首是中文/其它非 ASCII 字母时，后面的 `[scope:]` 只是正文提及，不是标注。
-    first = unicodedata.normalize("NFKC", original[:1])
-    if first.isalpha() and not first.isascii():
+    if not original:
         return None
+    # 行首是中文/其它非 ASCII 字母时，后面的 `[scope:]` 只是正文提及，不是标注。
+    first = original[:1]
+    if unicodedata.category(first)[0] == "L":
+        folded_first = unicodedata.normalize("NFKC", first)
+        if not (folded_first.isascii() and folded_first.isalpha()):
+            return None
+    # 键帽（1️⃣）是 ASCII 数字 + VS16 + U+20E3：整组剥掉再扫。
+    original = re.sub(r"^[0-9](?:\ufe0f|\u20e3)+\s*", "", original)
     # 任何“括号开头 + 前 64 字内有冒号”的行都按标签处理：同形字/异体括号
     # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
     head = unicodedata.normalize("NFKC", original[:64])
