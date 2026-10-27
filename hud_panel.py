@@ -211,6 +211,15 @@ def degenerate_reason(body: str) -> str:
     return ""
 
 
+_CONFUSABLES = str.maketrans({
+    # Cyrillic / Greek 常见同形字（scope 用到的五个字母及邻近）
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c",
+    "\u0455": "s", "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0458": "j",
+    "\u0501": "d", "\u04bb": "h", "\u04cf": "l", "\u051b": "q", "\u051d": "w",
+    "\u03b1": "a", "\u03b5": "e", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v",
+    "\u03bf": "o", "\u03c1": "p", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x",
+})
+
 def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     """行首 scope 标注探测（NFKC + 去格式字符 + 任意非单词前缀）。
 
@@ -226,7 +235,7 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     folded = unicodedata.normalize("NFKC", decomposed)
     # 扫描串只保留 ASCII：任何 Unicode 夹层（Cf/Mn/Me/Co/So/私用区/盲文空白…）
     # 都直接消失，避免“逐类枚举、每轮漏一个”。标准 token 都是 ASCII。
-    scan = "".join(ch for ch in decomposed if ord(ch) < 128)
+    scan = "".join(ch for ch in decomposed.translate(_CONFUSABLES) if ord(ch) < 128)
     m = re.match(r"^(\W*)(scop\w*)\s*:?\s*(.*)$", scan, re.IGNORECASE)
     if not m:
         return None
@@ -362,7 +371,7 @@ def has_scope_like(body: str) -> bool:
     """正文任意位置（任意字符宽度/零宽）出现 `scop...:` 就当作 scope 字样。"""
     decomposed = unicodedata.normalize("NFKD", body)
     cleaned = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn"))
-    scan = "".join(ch for ch in decomposed if ord(ch) < 128)
+    scan = "".join(ch for ch in decomposed.translate(_CONFUSABLES) if ord(ch) < 128)
     return bool(re.search(r"scop\w*\s*[:：]", scan, re.IGNORECASE))
 
 

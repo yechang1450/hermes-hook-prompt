@@ -414,6 +414,9 @@ class HookParserCase(Base):
             "1. scope\u20dd: profile:ceo 机密XYZ",
             "1. scope\u2800: profile:ceo 机密XYZ",
             "1. scope\ue000: profile:ceo 机密XYZ",
+            "1. [ѕcope: profile:ceo] 机密XYZ",
+            "1. [ѕсоре: profile:ceo] 机密XYZ",
+            "1. [ѕсορε: profile:ceo] 机密XYZ",
             "1.〈scope: profile:ceo〉 机密XYZ",
         ):
             text, kept, _total = self.hp.filter_body(body, "S-BUILD", "build")
