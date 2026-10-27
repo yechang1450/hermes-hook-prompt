@@ -242,10 +242,20 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
         if (":" in head or "：" in head) and not re.match(r"^\[\s*scope\b", head, re.IGNORECASE):
             token = head[1:].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
             return (token or "?", False)
-    decomposed = unicodedata.normalize("NFKD", original)
+    # 去掉行首的非 ASCII 标记（①/℅/〈/全角括号/零宽…）再归一：
+    # 这些字符 NFKD 后可能变成 ASCII（①→1、℅→c/o），留在扫描串里会挡住 `scope`。
+    start = 0
+    while start < len(original):
+        ch = original[start]
+        if ord(ch) < 128:
+            break
+        if unicodedata.category(ch)[0] in ("N", "S", "P", "Z", "C", "M"):
+            start += 1
+            continue
+        break
+    scan_src = original[start:]
+    decomposed = unicodedata.normalize("NFKD", scan_src)
     folded = unicodedata.normalize("NFKC", decomposed)
-    # 扫描串只保留 ASCII：任何 Unicode 夹层（Cf/Mn/Me/Co/So/私用区/盲文空白…）
-    # 都直接消失，避免“逐类枚举、每轮漏一个”。标准 token 都是 ASCII。
     scan = "".join(ch for ch in decomposed.translate(_CONFUSABLES) if ord(ch) < 128)
     m = re.match(r"^(\W*)(scop\w*)\s*:?\s*(.*)$", scan, re.IGNORECASE)
     if not m:
