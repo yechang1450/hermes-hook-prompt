@@ -400,6 +400,13 @@ class HookParserCase(Base):
             self.assertIsNone(item["scope"], (body, item))
             self.assertTrue(item["malformed_scope"], (body, item))
 
+    def test_keycap_continuation_label_is_effective(self):
+        body = "1. 公共\n1️⃣[scope: profile:ceo] SECRET-KEYCAP\n"
+        text, _kept, _total = self.hp.filter_body(body, "S-DEFAULT", "default")
+        self.assertNotIn("SECRET-KEYCAP", text)
+        text_ceo, _kept, _total = self.hp.filter_body(body, "S-CEO", "ceo")
+        self.assertIn("SECRET-KEYCAP", text_ceo)
+
     def test_preamble_scope_line_is_not_broadcast(self):
         body = "[scope: profile:ceo] SECRET-PREAMBLE\n1. 公共\n"
         text, kept, total = self.hp.filter_body(body, "S-BUILD", "build")
@@ -438,6 +445,7 @@ class HookParserCase(Base):
             "1. ①scope: profile:ceo 机密XYZ",
             "1. ℅[scope: profile:ceo] 机密XYZ",
             "1. ㊙scope: profile:ceo 机密XYZ",
+            "1. ѕсоре: profile:ceo 机密XYZ",
             "1. 1️⃣scope: profile:ceo 机密XYZ",
             "1. [ϲcope: profile:ceo] MARK",
             "1.〈scope: profile:ceo〉 机密XYZ",

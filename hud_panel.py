@@ -235,7 +235,7 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     # 行首是中文/其它非 ASCII 字母时，后面的 `[scope:]` 只是正文提及，不是标注。
     first = original[:1]
     if unicodedata.category(first)[0] == "L":
-        folded_first = unicodedata.normalize("NFKC", first)
+        folded_first = unicodedata.normalize("NFKC", first.translate(_CONFUSABLES))
         if not (folded_first.isascii() and folded_first.isalpha()):
             return None
     # 键帽（1️⃣）是 ASCII 数字 + VS16 + U+20E3：整组剥掉再扫。
@@ -337,6 +337,13 @@ def entries(body: str) -> list[dict]:
                 if not exact or parse_scope(found) is None:
                     invalid_continuation.append(found)
                     malformed_scope = True
+                    continue
+                # 键帽/装饰前缀后的标准标注：当正常续行标注处理，
+                # 不能因为 SCOPE_RE 没直接匹配就当作“没有标注”。
+                labels.append(found)
+                scope_lines.append(i)
+                if scope_line is None:
+                    scope_line = i
                 continue
             found = mm.group(1)
             if parse_scope(found) is None:
