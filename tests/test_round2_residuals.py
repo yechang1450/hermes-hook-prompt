@@ -319,9 +319,33 @@ class HookParserCase(Base):
                "    - command: python D:/workspace/temp/hud/hud_inject.py.bak-20261024\n")
         self.assertEqual(self.hp.hook_commands(cfg), [])
 
+    def test_tilde_backup_variants_are_not_the_live_hook(self):
+        for path in ("D:/x/hud_inject.py~", "D:/x/~hud_inject.py"):
+            cfg = ("hooks:\n  pre_llm_call:\n"
+                   f"    - command: python {path}\n")
+            self.assertEqual(self.hp.hook_commands(cfg), [], path)
+
+    def test_quoted_hash_inside_command_is_not_a_comment(self):
+        cfg = ("hooks:\n  pre_llm_call:\n"
+               '    - command: "python D:/x/hud_inject.py --tag #1"\n')
+        self.assertEqual(
+            self.hp.hook_commands(cfg),
+            ["python D:/x/hud_inject.py --tag #1"],
+        )
+
+    def test_command_in_a_comment_is_not_declared(self):
+        cfg = ("hooks:\n  pre_llm_call: []  # 旧: [{command: python D:/x/hud_inject.py}]\n")
+        self.assertEqual(self.hp.hook_commands(cfg), [])
+
     def test_top_level_hook_key_outside_hooks_block_ignored(self):
         cfg = "pre_llm_call: python D:/x/hud_inject.py\nhooks:\n  post_tool_call:\n    - command: python D:/x/hud_inject.py\n"
         self.assertEqual(self.hp.hook_commands(cfg), [])
+
+    def test_malformed_scope_is_fail_closed_and_warned(self):
+        body = "1. [ scope: all] 这条不能被广播\n"
+        item = self.hp.entries(body)[0]
+        self.assertIsNone(item["scope"], item)
+        self.assertIn("scope", " ".join(self.hp.validate(body)))
 
     def test_approved_commands_event_domain_and_bad_json(self):
         data = json.dumps({"approvals": [

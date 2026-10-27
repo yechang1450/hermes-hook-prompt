@@ -232,6 +232,14 @@ def entries(body: str) -> list[dict]:
         rest = first[len(marker.group(0)):] if marker else first
         m = SCOPE_RE.match(rest)
         token = m.group(1) if m else None
+        malformed_scope = False
+        if token is None:
+            # `[ scope: all]` / `[scope：all]` 这类写坏的标注：不能让调用方当成“未标注→默认 all”
+            # 静默广播；抓出来按非法处理，check 会告警并 fail-closed。
+            loose = re.search(r"\[\s*scope\s*[:：]\s*([^\]]*)\]", rest, re.IGNORECASE)
+            if loose:
+                token = loose.group(1).strip()
+                malformed_scope = True
         labels: list[str] = [token] if token is not None else []
         scope_line = None
         scope_lines: list[int] = []
@@ -256,10 +264,11 @@ def entries(body: str) -> list[dict]:
             token = labels[0]
         elif labels:
             token = labels[0]
-        scope = None if conflict else (parse_scope(token) if token else None)
+        scope = None if (conflict or malformed_scope) else (parse_scope(token) if token else None)
         out.append({"start": start, "end": end, "scope_token": token, "scope": scope,
                     "scope_line": scope_line, "scope_lines": scope_lines,
                     "conflict": conflict, "scope_labels": labels,
+                    "malformed_scope": malformed_scope,
                     "invalid_continuation": invalid_continuation})
     return out
 
@@ -428,11 +437,11 @@ HOOK_EVENT = "pre_llm_call"
 _HOOK_CMD_RE = re.compile(r"command\s*:\s*[\"']?([^\"',}\]]+)")
 
 
-_HUD_INJECT_RE = re.compile(r"(?<![\w.-])hud_inject\.py(?![.\w-])")
+_HUD_INJECT_RE = re.compile(r"(?<![\w.~-])hud_inject\.py(?![.\w~-])")
 
 
-def _strip_yaml_comment(value: str) -> str:
-    """去掉 YAML 行内注释；引号内的 # 保留。"""
+def _strip_yaml_comment_preserve(value: str) -> str:
+    """去掉 YAML 行内注释但保留缩进；引号内的 # 保留。"""
     out: list[str] = []
     quote: str | None = None
     escaped = False
@@ -453,7 +462,12 @@ def _strip_yaml_comment(value: str) -> str:
         if ch == "#" and (not out or out[-1].isspace()):
             break
         out.append(ch)
-    return "".join(out).strip()
+    return "".join(out).rstrip()
+
+
+def _strip_yaml_comment(value: str) -> str:
+    """去掉 YAML 行内注释；引号内的 # 保留（返回去首尾空白）。"""
+    return _strip_yaml_comment_preserve(value).strip()
 
 
 def _is_hud_inject_command(cmd: str) -> bool:
@@ -465,10 +479,11 @@ def _hook_commands_in(text: str) -> list[str]:
     """从一段 YAML/行内文本里取 `command: …`；只认指向 hud_inject.py 的条目。"""
     if "hud_inject" not in text:
         return []
+    cleaned = _strip_yaml_comment_preserve(text)
     return [
-        _strip_yaml_comment(cmd).strip()
-        for cmd in _HOOK_CMD_RE.findall(text)
-        if _is_hud_inject_command(_strip_yaml_comment(cmd))
+        cmd.strip()
+        for cmd in _HOOK_CMD_RE.findall(cleaned)
+        if _is_hud_inject_command(cmd.strip())
     ]
 
 
@@ -485,7 +500,7 @@ def hook_commands(config_text: str, event: str = HOOK_EVENT) -> list[str]:
     base: int | None = None
     current: str | None = None
     for raw in normalize_newlines(config_text).splitlines():
-        line = raw.rstrip()
+        line = _strip_yaml_comment_preserve(raw)
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
