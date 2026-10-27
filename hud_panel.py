@@ -234,6 +234,14 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     first = unicodedata.normalize("NFKC", original[:1])
     if first.isalpha() and not first.isascii():
         return None
+    # 任何“括号开头 + 前 64 字内有冒号”的行都按标签处理：同形字/异体括号
+    # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
+    head = unicodedata.normalize("NFKC", original[:64])
+    opener = head[:1]
+    if opener and unicodedata.category(opener).startswith("P") and opener not in "-–—":
+        if (":" in head or "：" in head) and not re.match(r"^\[\s*scope\b", head, re.IGNORECASE):
+            token = head[1:].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
+            return (token or "?", False)
     decomposed = unicodedata.normalize("NFKD", original)
     folded = unicodedata.normalize("NFKC", decomposed)
     # 扫描串只保留 ASCII：任何 Unicode 夹层（Cf/Mn/Me/Co/So/私用区/盲文空白…）
