@@ -347,6 +347,26 @@ class HookParserCase(Base):
         self.assertIsNone(item["scope"], item)
         self.assertIn("scope", " ".join(self.hp.validate(body)))
 
+    def test_all_malformed_scope_variants_fail_closed(self):
+        for body in (
+            "1. ［scope: profile:ceo］ 只给 ceo\n",
+            "1. [scope: all 缺右括号\n",
+            "1. [Scope : all] x\n",
+        ):
+            item = self.hp.entries(body)[0]
+            self.assertIsNone(item["scope"], (body, item))
+            self.assertTrue(item["malformed_scope"], (body, item))
+            self.assertTrue(self.hp.validate(body), body)
+
+    def test_body_text_mentioning_scope_is_not_a_tag(self):
+        item = self.hp.entries("1. 正文提到 [scope: all] 但不是标注\n")[0]
+        self.assertFalse(item["malformed_scope"], item)
+
+    def test_uppercase_hook_filename_is_recognized(self):
+        cfg = ("hooks:\n  pre_llm_call:\n"
+               "    - command: python D:/x/HUD_INJECT.PY\n")
+        self.assertEqual(self.hp.hook_commands(cfg), ["python D:/x/HUD_INJECT.PY"])
+
     def test_approved_commands_event_domain_and_bad_json(self):
         data = json.dumps({"approvals": [
             {"event": "pre_tool_call", "command": "python D:/x/hud_inject.py"},

@@ -206,6 +206,28 @@ def degenerate_reason(body: str) -> str:
     return ""
 
 
+def _loose_scope_at(text: str) -> tuple[str, bool] | None:
+    """只在**行首**（允许前导空白）识别 scope 标注，返回 (token, 是否标准写法)。
+
+    全角括号/全角冒号/缺右括号也算“写了标注”，由调用方按非法处理；
+    正文中间提到 `[scope: …]` 不算标注（旧行为必须保留）。
+    """
+    stripped = text.lstrip()
+    if not (stripped.startswith("[") or stripped.startswith("［")):
+        return None
+    normalized = stripped.replace("［", "[").replace("］", "]").replace("：", ":")
+    m = re.match(r"^\[\s*scope\s*:\s*(.*)$", normalized, re.IGNORECASE)
+    if not m:
+        return None
+    body = m.group(1)
+    token = body.split("]", 1)[0].strip()
+    exact = (
+        bool(SCOPE_RE.match(normalized))
+        and not any(ch in stripped for ch in ("［", "］", "："))
+    )
+    return token, exact
+
+
 def entries(body: str) -> list[dict]:
     """切成条目：{start,end,scope_token,scope,scope_line,scope_lines,conflict,scope_labels,
     invalid_continuation}。
@@ -233,12 +255,13 @@ def entries(body: str) -> list[dict]:
         m = SCOPE_RE.match(rest)
         token = m.group(1) if m else None
         malformed_scope = False
-        if token is None:
-            # `[ scope: all]` / `[scope：all]` 这类写坏的标注：不能让调用方当成“未标注→默认 all”
-            # 静默广播；抓出来按非法处理，check 会告警并 fail-closed。
-            loose = re.search(r"\[\s*scope\s*[:：]\s*([^\]]*)\]", rest, re.IGNORECASE)
-            if loose:
-                token = loose.group(1).strip()
+        loose = _loose_scope_at(rest)
+        if loose is not None:
+            loose_token, exact = loose
+            if token is None:
+                token = loose_token
+            if not exact:
+                # 全角括号/缺右括号/[ scope] 等：按非法标注 fail-closed。
                 malformed_scope = True
         labels: list[str] = [token] if token is not None else []
         scope_line = None
@@ -249,11 +272,19 @@ def entries(body: str) -> list[dict]:
             if mask[i]:
                 continue
             mm = SCOPE_RE.match(lines[i])
-            if not mm:
+            loose = _loose_scope_at(lines[i])
+            if not mm and loose is None:
+                continue
+            if not mm and loose is not None:
+                found, exact = loose
+                if not exact or parse_scope(found) is None:
+                    invalid_continuation.append(found)
+                    malformed_scope = True
                 continue
             found = mm.group(1)
             if parse_scope(found) is None:
                 invalid_continuation.append(found)   # 非法：不当标注，正文原样留着
+                malformed_scope = True
                 continue
             labels.append(found)
             scope_lines.append(i)
@@ -477,7 +508,7 @@ def _is_hud_inject_command(cmd: str) -> bool:
 
 def _hook_commands_in(text: str) -> list[str]:
     """从一段 YAML/行内文本里取 `command: …`；只认指向 hud_inject.py 的条目。"""
-    if "hud_inject" not in text:
+    if "hud_inject" not in text.lower():
         return []
     cleaned = _strip_yaml_comment_preserve(text)
     return [
