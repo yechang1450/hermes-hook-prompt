@@ -33,7 +33,10 @@ import re
 
 ENTRY_RE = re.compile(r"^(?:\d+[.)、]|[-*])\s+")
 SCOPE_RE = re.compile(r"^\s*\[scope:\s*([^\]]*?)\s*\]\s*", re.IGNORECASE)
-INLINE_SCOPE_RE = re.compile(r"[\[［【（〔]\s*scope\b\s*:?[^\]］】）〕]*[\]］】）〕]?", re.IGNORECASE)
+INLINE_SCOPE_RE = re.compile(
+    r"[\[［【（〔｛(<〈]\s*scop(?:e)?\b\s*:?[^\]］】）〕｝)>〉]*[\]］】）〕｝)>〉]?",
+    re.IGNORECASE,
+)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 META_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 # 会话 id / 档名允许的字符：字母数字开头，其余可用 _ . -
@@ -213,17 +216,25 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     正文中间提到 `[scope: …]` 不算标注（旧行为必须保留）。
     """
     stripped = text.lstrip()
-    if not stripped.startswith(("[", "［", "【", "（", "〔")):
+    if not stripped.startswith(("[", "［", "【", "（", "〔", "｛", "(", "<", "〈")):
+        # 无括号的 `scope: …` / `scop: …` 在行首也算“像标注”，必须 fail-closed。
+        bare = re.match(r"^scop(?:e)?\b\s*:?\s*(.*)$", stripped, re.IGNORECASE)
+        if bare:
+            return bare.group(1).strip(), False
         return None
     normalized = (
         stripped.replace("［", "[").replace("］", "]")
         .replace("【", "[").replace("】", "]")
         .replace("（", "[").replace("）", "]")
+        .replace("(", "[").replace(")", "]")
         .replace("〔", "[").replace("〕", "]")
+        .replace("｛", "[").replace("｝", "]")
+        .replace("<", "[").replace(">", "]")
+        .replace("〈", "[").replace("〉", "]")
         .replace("：", ":")
     )
     # 冒号可有可无：`[scope profile:ceo]` 也是“像标注”，必须 fail-closed。
-    m = re.match(r"^\[\s*scope\b\s*:?\s*(.*)$", normalized, re.IGNORECASE)
+    m = re.match(r"^\[\s*scop(?:e)?\b\s*:?\s*(.*)$", normalized, re.IGNORECASE)
     if not m:
         return None
     body = m.group(1)
@@ -238,12 +249,22 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
         close = "】"
     elif stripped.startswith("（"):
         close = "）"
+    elif stripped.startswith("｛"):
+        close = "｝"
+    elif stripped.startswith("<"):
+        close = ">"
+    elif stripped.startswith("〈"):
+        close = "〉"
     else:
         close = "〕"
     tag = stripped.split(close, 1)[0]
     exact = (
-        bool(SCOPE_RE.match(normalized))
-        and not any(ch in tag for ch in ("［", "］", "【", "】", "（", "）", "〔", "〕", "："))
+        stripped.startswith("[")
+        and bool(SCOPE_RE.match(normalized))
+        and not any(
+            ch in tag
+            for ch in ("［", "］", "【", "】", "（", "）", "〔", "〕", "｛", "｝", "<", ">", "〈", "〉", "：")
+        )
     )
     return token, exact
 

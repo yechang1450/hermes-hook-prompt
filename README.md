@@ -244,7 +244,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 ## 七、测试
 
-229 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+230 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -276,7 +276,7 @@ python -m unittest discover -s tests -v
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
 | `docs/KNOWN-ISSUES.md` | 已知问题：P0/P1 判级口径、当前清单（P0/P1 均为 0）、已修复与历史残留 |
 | `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移 runbook：裸 `python` → 绝对解释器、`temp/hud/` → 仓库路径、17 档逐档清单与回滚（**未执行**） |
-| `tests/` | 单元测试（标准库 unittest，共 229）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（14）、`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（33：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
+| `tests/` | 单元测试（标准库 unittest，共 230）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（14）、`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（34：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
