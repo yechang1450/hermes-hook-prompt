@@ -306,6 +306,11 @@ class HookParserCase(Base):
         for cfg in (block, inline, deep, same_indent):
             self.assertEqual(self.hp.hook_commands(cfg), ["python D:/x/hud_inject.py"], cfg)
 
+    def test_backup_suffix_is_not_the_live_hook(self):
+        cfg = ("hooks:\n  pre_llm_call:\n"
+               "    - command: python D:/workspace/temp/hud/hud_inject.py.bak-20261024\n")
+        self.assertEqual(self.hp.hook_commands(cfg), [])
+
     def test_top_level_hook_key_outside_hooks_block_ignored(self):
         cfg = "pre_llm_call: python D:/x/hud_inject.py\nhooks:\n  post_tool_call:\n    - command: python D:/x/hud_inject.py\n"
         self.assertEqual(self.hp.hook_commands(cfg), [])

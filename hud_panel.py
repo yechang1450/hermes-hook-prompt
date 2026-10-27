@@ -428,11 +428,19 @@ HOOK_EVENT = "pre_llm_call"
 _HOOK_CMD_RE = re.compile(r"command\s*:\s*[\"']?([^\"',}\]]+)")
 
 
+_HUD_INJECT_RE = re.compile(r"(?<![\w.-])hud_inject\.py(?![.\w-])")
+
+
+def _is_hud_inject_command(cmd: str) -> bool:
+    """命令里必须出现**完整的** `hud_inject.py`；`.bak`/`.py.old` 等变体不算。"""
+    return bool(_HUD_INJECT_RE.search(cmd))
+
+
 def _hook_commands_in(text: str) -> list[str]:
-    """从一段 YAML/行内文本里取 `command: …`；只认指向 hud_inject 的条目。"""
+    """从一段 YAML/行内文本里取 `command: …`；只认指向 hud_inject.py 的条目。"""
     if "hud_inject" not in text:
         return []
-    return [cmd.strip() for cmd in _HOOK_CMD_RE.findall(text)]
+    return [cmd.strip() for cmd in _HOOK_CMD_RE.findall(text) if _is_hud_inject_command(cmd)]
 
 
 def hook_commands(config_text: str, event: str = HOOK_EVENT) -> list[str]:
