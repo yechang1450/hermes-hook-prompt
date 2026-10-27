@@ -33,7 +33,7 @@ import re
 
 ENTRY_RE = re.compile(r"^(?:\d+[.)、]|[-*])\s+")
 SCOPE_RE = re.compile(r"^\s*\[scope:\s*([^\]]*?)\s*\]\s*", re.IGNORECASE)
-INLINE_SCOPE_RE = re.compile(r"\[scope:[^\]]*\]", re.IGNORECASE)
+INLINE_SCOPE_RE = re.compile(r"[\[［]\s*scope\s*[:：][^\]］]*[\]］]?", re.IGNORECASE)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 META_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 # 会话 id / 档名允许的字符：字母数字开头，其余可用 _ . -
@@ -221,9 +221,13 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
         return None
     body = m.group(1)
     token = body.split("]", 1)[0].strip()
+    # 只看标注本身，不看整行：正文里的中文冒号不是 scope 写法错误。
+    tag = stripped.split("]", 1)[0]
+    if "］" in stripped:
+        tag = stripped.split("］", 1)[0]
     exact = (
         bool(SCOPE_RE.match(normalized))
-        and not any(ch in stripped for ch in ("［", "］", "："))
+        and not any(ch in tag for ch in ("［", "］", "："))
     )
     return token, exact
 
@@ -353,7 +357,7 @@ def filter_body(body: str, session_id: str, profile: str,
     out: list[str] = lines[: items[0]["start"]]  # 保留第一个条目之前的标题/前言
     kept = 0
     for item in items:
-        if item["scope_token"] is not None:
+        if item["scope_token"] is not None or item.get("malformed_scope"):
             scope = item["scope"]  # 非法 / 两处冲突 → None → 不匹配（fail-closed）
         else:
             scope = default_scope if default_scope is not None else ("all", set())

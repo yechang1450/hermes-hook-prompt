@@ -306,15 +306,14 @@ class ZeroEntryScopeCase(Base):
 
 
 # --------------------------------------------------------------------------- #
-# P0-7：续行非法 [scope:] 保留原文，不整条消失
+# 续行非法 [scope:] 必须 fail-closed：不能把“只给某档”的正文广播给所有人
 # --------------------------------------------------------------------------- #
 class InvalidContinuationScopeCase(Base):
-    def test_invalid_continuation_scope_keeps_entry_text(self):
+    def test_invalid_continuation_scope_drops_the_entry(self):
         self.panel_text("1. 公共\n2. 只给 A\n   [scope: session 123]\n   续行")
         ctx = self.ctx(self.inject("BBB"))
-        self.assertIn("只给 A", ctx)
-        self.assertIn("续行", ctx)
-        self.assertIn("[scope: session 123]", ctx)   # 非法标注按普通文本保留
+        self.assertNotIn("只给 A", ctx)
+        self.assertNotIn("续行", ctx)
         r = self.ctl("check")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("续行标注非法", r.stdout)

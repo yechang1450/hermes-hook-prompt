@@ -362,6 +362,17 @@ class HookParserCase(Base):
         item = self.hp.entries("1. 正文提到 [scope: all] 但不是标注\n")[0]
         self.assertFalse(item["malformed_scope"], item)
 
+    def test_valid_tag_with_fullwidth_colon_in_body_is_not_malformed(self):
+        item = self.hp.entries("1. [scope: all] 注意：只给 ceo 看\n")[0]
+        self.assertEqual(item["scope"], ("all", set()), item)
+        self.assertFalse(item["malformed_scope"], item)
+
+    def test_malformed_continuation_drops_the_whole_entry(self):
+        body = "1. 公共\n   [ scope: profile:ceo] 只给 ceo\n"
+        text, kept, total = self.hp.filter_body(body, "AAA", "build")
+        self.assertEqual((kept, total), (0, 1), body)
+        self.assertEqual(text.strip(), "", text)
+
     def test_uppercase_hook_filename_is_recognized(self):
         cfg = ("hooks:\n  pre_llm_call:\n"
                "    - command: python D:/x/HUD_INJECT.PY\n")
