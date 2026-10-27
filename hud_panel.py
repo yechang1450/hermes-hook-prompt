@@ -218,14 +218,20 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     再看行首是否为 `scop... :`。写法不标准就返回 exact=False，交给调用方 fail-closed。
     """
     original = text.lstrip()
+    # 行首是中文/其它非 ASCII 字母时，后面的 `[scope:]` 只是正文提及，不是标注。
+    first = unicodedata.normalize("NFKC", original[:1])
+    if first.isalpha() and not first.isascii():
+        return None
     decomposed = unicodedata.normalize("NFKD", original)
-    cleaned = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn"))
-    normalized = unicodedata.normalize("NFKC", cleaned)
-    m = re.match(r"^(\W*)(scop\w*)\s*:?\s*(.*)$", cleaned, re.IGNORECASE)
+    folded = unicodedata.normalize("NFKC", decomposed)
+    # 扫描串只保留 ASCII：任何 Unicode 夹层（Cf/Mn/Me/Co/So/私用区/盲文空白…）
+    # 都直接消失，避免“逐类枚举、每轮漏一个”。标准 token 都是 ASCII。
+    scan = "".join(ch for ch in decomposed if ord(ch) < 128)
+    m = re.match(r"^(\W*)(scop\w*)\s*:?\s*(.*)$", scan, re.IGNORECASE)
     if not m:
         return None
     prefix, _word, body = m.group(1), m.group(2), m.group(3)
-    colon = ":" in cleaned[: len(cleaned) - len(body)]
+    colon = ":" in scan[: len(scan) - len(body)]
     # 裸词 `scope` 没有冒号、也没有标点前缀时是普通正文，不当作标注。
     if not prefix and not colon:
         return None
@@ -238,7 +244,7 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
         original.startswith("[")
         and ":" in tag
         and not any(ord(ch) > 127 for ch in tag)
-        and bool(SCOPE_RE.match(normalized))
+        and bool(SCOPE_RE.match(folded))
     )
     return token, exact
 
@@ -356,8 +362,8 @@ def has_scope_like(body: str) -> bool:
     """正文任意位置（任意字符宽度/零宽）出现 `scop...:` 就当作 scope 字样。"""
     decomposed = unicodedata.normalize("NFKD", body)
     cleaned = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn"))
-    normalized = unicodedata.normalize("NFKC", cleaned)
-    return bool(re.search(r"scop\w*\s*[:：]", normalized, re.IGNORECASE))
+    scan = "".join(ch for ch in decomposed if ord(ch) < 128)
+    return bool(re.search(r"scop\w*\s*[:：]", scan, re.IGNORECASE))
 
 
 def filter_body(body: str, session_id: str, profile: str,
