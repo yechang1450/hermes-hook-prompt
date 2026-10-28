@@ -247,6 +247,17 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     if opener and not opener.isalnum() and not opener.isspace() and opener not in "-–—":
         if (":" in head or "：" in head) and not re.match(r"^\[\s*scope\b", head, re.IGNORECASE):
             token = head[1:].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
+            folded_token = token.translate(_CONFUSABLES)
+            variants = [folded_token]
+            if any(ch in token for ch in ("ϲ", "Ϲ", "ς", "Σ")):
+                variants.append(
+                    token.replace("ϲ", "c").replace("Ϲ", "C")
+                    .replace("ς", "c").replace("Σ", "C")
+                    .translate(_CONFUSABLES)
+                )
+            if not (any(re.match(r"^scop\w*", item, re.IGNORECASE) for item in variants)
+                    or parse_scope(token) is not None):
+                return None
             return (token or "?", False)
     # 去掉行首的非 ASCII 标记（①/℅/〈/全角括号/零宽…）再归一：
     # 这些字符 NFKD 后可能变成 ASCII（①→1、℅→c/o），留在扫描串里会挡住 `scope`。
@@ -461,7 +472,7 @@ def filter_body(body: str, session_id: str, profile: str,
         block = lines[item["start"]:item["end"]]
         marker_m = ENTRY_RE.match(block[0])
         marker = marker_m.group(0) if marker_m else ""
-        rest = SCOPE_RE.sub("", block[0][len(marker):], count=1)
+        rest = strip_leading_scope(block[0][len(marker):])
         cleaned = [(marker + rest).rstrip()]
         for idx in range(item["start"] + 1, item["end"]):
             line = lines[idx]

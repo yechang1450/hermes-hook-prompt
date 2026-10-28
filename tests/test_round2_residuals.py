@@ -407,6 +407,11 @@ class HookParserCase(Base):
         text_ceo, _kept, _total = self.hp.filter_body(body, "S-CEO", "ceo")
         self.assertIn("SECRET-KEYCAP", text_ceo)
 
+    def test_non_scope_bracket_prefix_is_preserved(self):
+        item = self.hp.entries("1. <备注：只给 ceo> 机密XYZ\n")[0]
+        self.assertIsNone(item["scope"], item)
+        self.assertFalse(item["malformed_scope"], item)
+
     def test_preamble_scope_line_is_not_broadcast(self):
         body = "[scope: profile:ceo] SECRET-PREAMBLE\n1. 公共\n"
         text, kept, total = self.hp.filter_body(body, "S-BUILD", "build")
@@ -415,9 +420,7 @@ class HookParserCase(Base):
 
     def test_symbol_prefix_and_confusable_scope_labels(self):
         for body in (
-            "1. <备注：只给 ceo> 机密XYZ\n",
             "1. [sϲope: profile:ceo] 机密XYZ\n",
-            "1. (备注：只给 ceo) 机密XYZ\n",
         ):
             item = self.hp.entries(body)[0]
             self.assertIsNone(item["scope"], (body, item))

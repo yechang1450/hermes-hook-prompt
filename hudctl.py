@@ -917,7 +917,7 @@ def cmd_scope(args) -> int:
         marker_m = hud_panel.ENTRY_RE.match(lines[item["start"]])
         marker = marker_m.group(0) if marker_m else ""
         # 只删行首那个标注：正文里恰好写着 `[scope: …]` 字样（示例/说明）不能一起删掉
-        rest = hud_panel.SCOPE_RE.sub("", lines[item["start"]][len(marker):], count=1).lstrip()
+        rest = hud_panel.strip_leading_scope(lines[item["start"]][len(marker):]).lstrip()
         tag = "" if value.lower() == "none" else f"[scope: {value}] "
         block = [marker + tag + rest]
         drop = set(item.get("scope_lines") or ([item["scope_line"]] if item["scope_line"] is not None else []))
