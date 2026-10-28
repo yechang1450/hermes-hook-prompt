@@ -381,6 +381,23 @@ class HookParserCase(Base):
             self.assertIsNone(item["scope"], (body, item))
             self.assertTrue(item["malformed_scope"], (body, item))
 
+    def test_scope_inside_bracket_note_fail_closed(self):
+        for body in (
+            "1. [备注 scope: profile:ceo] 机密XYZ\n",
+            "1. [备注][scope: profile:ceo] 机密XYZ\n",
+        ):
+            item = self.hp.entries(body)[0]
+            self.assertIsNone(item["scope"], (body, item))
+            self.assertTrue(item["malformed_scope"], (body, item))
+            text, _kept, _total = self.hp.filter_body(body, "S", "default")
+            self.assertNotIn("机密XYZ", text, body)
+
+    def test_non_scope_bracket_prefix_is_not_dropped(self):
+        body = "1. [重要] 红线：不要重启\n"
+        text, kept, _total = self.hp.filter_body(body, "S", "default")
+        self.assertEqual(kept, 1, text)
+        self.assertIn("红线", text)
+
     def test_curly_angle_and_bare_scope_fail_closed(self):
         for body in (
             "1. ｛scope: profile:ceo｝ 机密XYZ\n",
