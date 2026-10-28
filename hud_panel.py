@@ -244,7 +244,7 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
     head = unicodedata.normalize("NFKC", original[:64])
     # 行首括号注释后面紧跟合法 scope 标注：不能当正文放过去（否则标签原文广播）。
-    inner = re.search(r"[\[［【（〔｛<〈(]\s*scop\w*\s*:?", head, re.IGNORECASE)
+    inner = re.search(r"[\[［【（〔｛<〈(]\s*scop\w*\s*:", head, re.IGNORECASE)
     if inner and inner.start() > 0:
         token = head[inner.start() + 1 :].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
         return (token or "?", False)
@@ -408,7 +408,11 @@ def strip_leading_scope(line: str) -> str:
         # 键帽/装饰前缀后的合法标注：SCOPE_RE 不匹配，但标签仍要剥掉，
         # 否则接收方会看到 `1️⃣[scope: profile:ceo]` 原文。
         if _loose_scope_at(line) is not None:
-            m = re.search(r"[\[［【（〔｛<〈(].*?[\]］】）〕｝>〉)]", line)
+            m = re.search(
+                r"[\[［【（〔｛<〈(]\s*scop\w*\s*:.*?[\]］】）〕｝>〉)]",
+                line,
+                re.IGNORECASE,
+            )
             if m:
                 return (line[: m.start()] + line[m.end() :]).rstrip()
         return line.rstrip()
