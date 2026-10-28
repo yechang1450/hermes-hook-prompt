@@ -243,6 +243,11 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     # 任何“括号开头 + 前 64 字内有冒号”的行都按标签处理：同形字/异体括号
     # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
     head = unicodedata.normalize("NFKC", original[:64])
+    # 行首括号注释后面紧跟合法 scope 标注：不能当正文放过去（否则标签原文广播）。
+    inner = re.search(r"[\[［【（〔｛<〈(]\s*scop\w*\s*:?", head, re.IGNORECASE)
+    if inner and inner.start() > 0:
+        token = head[inner.start() + 1 :].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
+        return (token or "?", False)
     opener = head[:1]
     if opener and not opener.isalnum() and not opener.isspace() and opener not in "-–—":
         if (":" in head or "：" in head) and not re.match(r"^\[\s*scope\b", head, re.IGNORECASE):
@@ -450,13 +455,12 @@ def filter_body(body: str, session_id: str, profile: str,
     lines = normalize_newlines(body).splitlines()
     items = entries(body)
     if not items:
-        if (INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body)
-                or has_scope_like(body) or has_label_like(body)):
+        if INLINE_SCOPE_RE.search(body) or BARE_SCOPE_RE.search(body) or has_scope_like(body):
             return "", 0, 0
         return body, 1, 1
     preamble = []
     for line in lines[: items[0]["start"]]:
-        if _loose_scope_at(line) is not None or has_scope_like(line) or has_label_like(line):
+        if _loose_scope_at(line) is not None or has_scope_like(line):
             # 前言里写标注/标签：该行不能原样广播（否则“只给 ceo”会进所有人上下文）。
             continue
         preamble.append(line)
@@ -549,7 +553,7 @@ def validate(body: str) -> list[str]:
         for token in item.get("invalid_continuation") or []:
             warns.append(f"[scope: {token}] 续行标注非法（只认 all / session:id / profile:name）："
                          "整条不注入（fail-closed）")
-    if not items and (INLINE_SCOPE_RE.search(body) or has_scope_like(body) or has_label_like(body)):
+    if not items and (INLINE_SCOPE_RE.search(body) or has_scope_like(body)):
         warns.append("正文里写了 [scope: …] 却没有任何可识别条目：注入会整块跳过"
                      "（条目必须以 1. / 1) / - / * 顶格开头）")
     lines = normalize_newlines(body).splitlines()
@@ -566,9 +570,9 @@ def validate(body: str) -> list[str]:
             if idx == item["start"]:
                 marker = ENTRY_RE.match(line)
                 head = line[len(marker.group(0)):] if marker else line
-                if SCOPE_RE.match(head):
+                if SCOPE_RE.match(head) or _loose_scope_at(head) is not None:
                     hits = hits[1:]      # 行首那个已被当标注
-            elif SCOPE_RE.match(line):
+            elif SCOPE_RE.match(line) or _loose_scope_at(line) is not None:
                 hits = hits[1:]          # 续行行首那个也已被当标注
             if hits:
                 warns.append(f"条目「{line.strip()[:20]}…」的标注不在行首，注入时不会生效也不会被删掉")
