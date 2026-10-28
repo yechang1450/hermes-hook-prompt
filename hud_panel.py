@@ -389,6 +389,12 @@ def strip_leading_scope(line: str) -> str:
     作用域另算）。所以这里把原缩进补回去。
     """
     if not SCOPE_RE.match(line):
+        # 键帽/装饰前缀后的合法标注：SCOPE_RE 不匹配，但标签仍要剥掉，
+        # 否则接收方会看到 `1️⃣[scope: profile:ceo]` 原文。
+        if _loose_scope_at(line) is not None:
+            m = re.search(r"[\[［【（〔｛<〈(].*?[\]］】）〕｝>〉)]", line)
+            if m:
+                return (line[: m.start()] + line[m.end() :]).rstrip()
         return line.rstrip()
     stripped = SCOPE_RE.sub("", line, count=1).rstrip()
     if not stripped.strip():
