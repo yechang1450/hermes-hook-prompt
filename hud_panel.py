@@ -243,7 +243,17 @@ def _loose_scope_at(text: str) -> tuple[str, bool] | None:
     # 任何“括号开头 + 前 64 字内有冒号”的行都按标签处理：同形字/异体括号
     # 不再逐个枚举，避免“补一个漏一个”。标准 [scope: …] 走后面的精确解析。
     head = unicodedata.normalize("NFKC", original[:64])
-    # 行首括号注释后面紧跟合法 scope 标注：不能当正文放过去（否则标签原文广播）。
+    # 括号注释里任何位置出现 `scope:` 都按标签处理：`[备注 scope: profile:ceo]`
+    # 若不拦，整条会按正文广播给所有人（fail-open）。
+    nested = re.search(
+        r"[\[［【（〔｛<〈(][^\]］】）〕｝>〉)\n]*?scop\w*\s*:",
+        head,
+        re.IGNORECASE,
+    )
+    if nested and not re.match(r"[\[［【（〔｛<〈(]\s*scop", nested.group(0), re.IGNORECASE):
+        token = head[nested.start() :].split(":", 1)[0].split("：", 1)[0]
+        token = token.lstrip("[［【（〔｛<〈( ").strip()
+        return (token or "?", False)
     inner = re.search(r"[\[［【（〔｛<〈(]\s*scop\w*\s*:", head, re.IGNORECASE)
     if inner and inner.start() > 0:
         token = head[inner.start() + 1 :].split(":", 1)[0].split("：", 1)[0].strip(" \t[](){}<>〈〉")
