@@ -316,7 +316,7 @@ class HookParserCase(Base):
 
     def test_backup_suffix_is_not_the_live_hook(self):
         cfg = ("hooks:\n  pre_llm_call:\n"
-               "    - command: python D:/workspace/temp/hud/hud_inject.py.bak-20261024\n")
+               "    - command: python C:/Users/yecha/workspace/temp/hud/hud_inject.py.bak-20261024\n")
         self.assertEqual(self.hp.hook_commands(cfg), [])
 
     def test_tilde_backup_variants_are_not_the_live_hook(self):
