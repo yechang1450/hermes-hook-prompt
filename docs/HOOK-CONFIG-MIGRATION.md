@@ -1,8 +1,9 @@
 # 钩子配置迁移：裸 `python` → 绝对解释器；`temp/hud/` → 仓库路径
 
-> **状态：runbook，未执行。**
-> 本轮只改仓库代码与文档，`config.yaml` / `shell-hooks-allowlist.json` 一个字都没动；本机 17 档仍在跑旧命令。
-> 执行属于**改配置**动作（逐档 17 次 `config set` + 17 次重新同意），按下面顺序做，做完一档验一档。
+> **状态：本机 2026-10-31 已执行（单档 default）。**
+> 实际落地形态：`<专用 venv>/Scripts/python.exe <仓库>/hud_inject.py`（本机具体路径见 `hermes config get hooks`）。
+> 改动量：`config set` 1 次、`--accept-hooks` 1 次；验收 `hermes hooks doctor` 四项全绿、`selfcheck.py` 7/7、注入日志已落仓库 `hud.log`、`hudctl impact` 显示该档全部会话生效。
+> 本机当前**只有 default 一个 profile**（多 bot 档未恢复）；下方正文保留多档通用流程，将来恢复多档时按第五节逐档执行。
 
 ## 一、为什么迁
 

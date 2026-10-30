@@ -12,20 +12,14 @@
 | **P2** | 需要特定条件（攻击者已具备等价权限、特定平台、并发窗口），且有 workaround | 排期修 |
 | **P3** | 体验 / 成本 / 隐私卫生 / 文档 | 顺手改 |
 
-**当前 P0 = 0，P1 = 0。** 盘点时间 2026-10-26；对应 HEAD 已修掉「并发建锁被误判成重解析点」（见文末）。
-CI 矩阵：`ubuntu-latest` / `windows-latest` × Python 3.10 / 3.12，4/4 绿。
+**当前 P0 = 0，P1 = 0，P2 = 0。** 盘点时间 2026-10-31（本机单档 default：237/237 本地通过、`selfcheck` 7/7、`hooks doctor` 四项绿）。
+CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12）。本机 2026-10-31 **无法查询远端运行结果**——无 `gh`、SSH 未配置、https 直连被重置；本地全量测试已通过，故这里不写「CI 绿」。
 
 ---
 
 ## P2
 
-### 1. 安装文档里的钩子命令用裸 `python`
-
-- **现象**：`hooks.pre_llm_call` 的命令写成 `python <dir>/hud_inject.py`，解释器由 PATH 决定。
-- **影响**：PATH 里任一可写目录放一个 `python.exe` 就能顶替**每轮以本用户身份执行**的代码；切虚拟环境 / 改 PATH 顺序也会让钩子悄悄换解释器或直接失败（失败是 fail-open，不拦对话，于是更难发现）。
-- **为什么是 P2 不是 P1**：能写 PATH 目录的人已经等价于能以本用户执行任意代码，这不是新增权限；真正的修法（绝对解释器）也已写好 runbook。
-- **workaround / 去向**：[HOOK-CONFIG-MIGRATION.md](HOOK-CONFIG-MIGRATION.md)——绝对解释器 + 仓库路径，**逐档 17 次**改配置并重新同意。本轮只写 runbook，未执行。
-- **自检**：`hermes config get hooks`（每档）；`hermes hooks doctor`。
+（当前无。原第 1 条「钩子命令用裸 `python`」已于 2026-10-31 修复，见文末。）
 
 ---
 
@@ -75,6 +69,8 @@ CI 矩阵：`ubuntu-latest` / `windows-latest` × Python 3.10 / 3.12，4/4 绿�
 
 ## 已修复（留档对账）
 
+- **钩子命令用裸 `python`、脚本跑在仓库外的副本上**（原 P2 #1）：解释器由 PATH 决定（任一可写目录放个 `python.exe` 就顶替了每轮以本用户身份执行的代码，切 venv / 改 PATH 顺序也会让钩子悄悄换解释器或 fail-open 失败），运行副本与仓库两份会漂（改完仓库 ≠ 线上生效）。
+  修法（2026-10-31，单档 default 已执行）：解释器改为专用 venv 的绝对路径、脚本改为仓库路径，`config set` + `--accept-hooks` 各一次。验收：`hermes hooks doctor` 四项全绿、`selfcheck.py` 7/7、注入日志从旧目录切到仓库 `hud.log`、`hudctl impact` 该档全部会话生效。流程与回滚见 [HOOK-CONFIG-MIGRATION.md](HOOK-CONFIG-MIGRATION.md)。
 - **`set --body` 把 CRLF 正文写成双 CR 行尾**：Windows 上文本模式默认换行转换把每个 `LF` 写成 `CRLF`，正文自带 CRLF 时就叠成 `CR CR LF`；`splitlines()` 把它当两个换行，注入到上下文里每行之间多出空行。
   修法：写入端 `--body`/stdin/`render_panel` 统一 `normalize_newlines`（CRLF、裸 CR、双 CR → `LF`），原子写固定 `newline=LF`；读取端 `hud_inject`/`hudctl` 以 `newline=""` 读原文再归一，所以旧版已经写坏的面板不用手改也能正常注入。回归：`tests/test_hud.py` 的四条行尾用例。
 - **同一 entry 有多处 `[scope: …]` 只认第一处**：第二处标注被当普通正文注进上下文，`check` 还是绿的。

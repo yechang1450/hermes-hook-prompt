@@ -49,7 +49,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 ## 二、安装
 
 要求：Python 3.10+（只用标准库；CI 覆盖 3.10 / 3.12），Hermes 能正常启动。仓库＝五个脚本 + 一份面板样例。
-实测环境：Windows 11、Hermes v0.22.2、Python 3.14.7。
+实测环境：Windows 11、Hermes v0.22.5、Python 3.14.9。
 
 ```bash
 git clone <this-repo> hermes-hook-prompt
@@ -57,17 +57,19 @@ cd hermes-hook-prompt
 cp panel.example.md panel.md      # 然后按需改正文与 expires_at
 ```
 
-声明钩子（**每个 profile 一次**；Windows 路径注意用 `/`）：
+声明钩子（**每个 profile 一次**；Windows 路径注意用 `/`）。两个路径都写**绝对路径**：解释器用专用 venv（或任何不随 PATH 变的位置），脚本指向**仓库里那份**。不要用裸 `python`——PATH 里任一可写目录都能顶替一个「每轮以你身份执行」的程序；也不要用仓库外的运行副本——两份迟早会漂。
 
 ```bash
 # default 档
 hermes config set --force hooks.pre_llm_call \
-  '[{"command":"python C:/path/to/hermes-hook-prompt/hud_inject.py","timeout":10}]'
+  '[{"command":"C:/path/to/venv/Scripts/python.exe C:/path/to/hermes-hook-prompt/hud_inject.py","timeout":10}]'
 
 # 其他档
 hermes -p <profile> config set --force hooks.pre_llm_call \
-  '[{"command":"python C:/path/to/hermes-hook-prompt/hud_inject.py","timeout":10}]'
+  '[{"command":"C:/path/to/venv/Scripts/python.exe C:/path/to/hermes-hook-prompt/hud_inject.py","timeout":10}]'
 ```
+
+解释器不必是 venv，只要是一个**不随环境变量改指向**的固定路径（项目纯标准库，venv 只用来给解释器一个稳定位置，不用装任何包）。
 
 记录同意（非交互；不加这条钩子会被跳过；default 档去掉 `-p <profile>`）：
 
@@ -275,7 +277,7 @@ python -m unittest discover -s tests -v
 | `panel.example.md` | 面板样例（复制成 `panel.md` 使用） |
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
 | `docs/KNOWN-ISSUES.md` | 已知问题：P0/P1 判级口径、当前清单（P0/P1 均为 0）、已修复与历史残留 |
-| `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移 runbook：裸 `python` → 绝对解释器、`temp/hud/` → 仓库路径、17 档逐档清单与回滚（**未执行**） |
+| `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移记录：裸 `python` → 绝对解释器、仓库外副本 → 仓库路径；含逐档清单、验收与回滚（**本机 2026-10-31 已按单档执行**） |
 | `tests/` | 单元测试（标准库 unittest，共 237）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（14）、`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（41：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
