@@ -83,7 +83,7 @@ echo '{"session_id": "smoke", "profile": "default"}' | "<绝对解释器>" "<仓
 <仓库>/{hud_inject.py,hudctl.py,hud_panel.py,hud_report.py,selfcheck.py,panel.md}
 ```
 
-- `hud_inject.py` 默认读**自己所在目录**的 `panel.md`；也可用 `HUD_PANEL` 覆盖（必须给 Windows 原生路径，`D:/...`，不要 `/d/...`——原生 Python 会把 `/d` 解析成 `\d`）；
+- `hud_inject.py` 默认读**自己所在目录**的 `panel.md`；也可用 `HUD_PANEL` 覆盖（必须给 Windows 原生路径，`C:/...`，不要 `/d/...`——原生 Python 会把 `/d` 解析成 `\d`）；
 - `panel.md` 不入库（`.gitignore` 已忽略），从旧目录**复制**过去：`cp "<旧目录>/panel.md" "<仓库>/panel.md"`；
 - 复制完先跑一次 `python hudctl.py status` 确认读到的是同一份面板（范围、到期、字数与迁移前一致）。
 

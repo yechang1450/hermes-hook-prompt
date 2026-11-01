@@ -162,7 +162,7 @@ python hudctl.py impact --profile default,ceo --kinds chat,cron  # 只看指定�
 
 面板正文是**压缩版**。口径分两层，别混：**仓库里的 `panel.example.md`** 正文 492 字、整块约 616 字（按 default 档估：标题行 + 正文 + 注入尾行 + 20 字提醒余量，`hudctl.py check` 算的就是这个数）；**本机正在跑的那份** `panel.md` 随内容/档名/到期时间变，以 `python hudctl.py status` 的输出为准（它按真实档名与到期时间估长，不是硬编码）。完整措辞存档在 `docs/panel-full-text.md`，规则条数与约束一一对应。
 
-注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向 OTUI（`build/open-tui-orchestrator`）。
+注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向本档自己的编排机制（`delegate_task` / `cron` / 本档工具）。
 
 ```bash
 python hudctl.py status                     # 范围、到期、剩多久、正文字数

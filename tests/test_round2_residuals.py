@@ -223,13 +223,13 @@ class SelfcheckEventDomainCase(Base):
         home = self.make_home(
             "hooks:\n"
             "  pre_tool_call:\n"
-            "    - command: python D:/x/hud_inject.py\n"
+            "    - command: python C:/x/hud_inject.py\n"
             "      timeout: 10\n"
             "  pre_llm_call:\n"
-            "    - command: python D:/x/somebody-else.py\n"
+            "    - command: python C:/x/somebody-else.py\n"
             "      timeout: 10\n",
-            [{"event": "pre_tool_call", "command": "python D:/x/hud_inject.py"},
-             {"event": "pre_llm_call", "command": "python D:/x/somebody-else.py"}])
+            [{"event": "pre_tool_call", "command": "python C:/x/hud_inject.py"},
+             {"event": "pre_llm_call", "command": "python C:/x/somebody-else.py"}])
         r = self.run_check(home)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         checks = self.checks()
@@ -240,8 +240,8 @@ class SelfcheckEventDomainCase(Base):
     def test_pre_llm_call_with_other_command_is_not_ours(self):
         """pre_llm_call 下挂的是别人：同样是没声明/没同意。"""
         home = self.make_home(
-            "hooks:\n  pre_llm_call:\n    - command: python D:/x/other.py\n",
-            [{"event": "pre_llm_call", "command": "python D:/x/other.py"}])
+            "hooks:\n  pre_llm_call:\n    - command: python C:/x/other.py\n",
+            [{"event": "pre_llm_call", "command": "python C:/x/other.py"}])
         r = self.run_check(home)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         checks = self.checks()
@@ -251,9 +251,9 @@ class SelfcheckEventDomainCase(Base):
     def test_four_space_indent_block_still_green(self):
         """不能为了事件域把合法写法判死：hooks 子键缩进 4 空格也要认。"""
         home = self.make_home(
-            "hooks:\n    pre_llm_call:\n        - command: python D:/x/hud_inject.py\n"
+            "hooks:\n    pre_llm_call:\n        - command: python C:/x/hud_inject.py\n"
             "          timeout: 10\n",
-            [{"event": "pre_llm_call", "command": "python D:/x/hud_inject.py"}])
+            [{"event": "pre_llm_call", "command": "python C:/x/hud_inject.py"}])
         r = self.run_check(home)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         data = json.loads((self.state / "selfcheck.json").read_text(encoding="utf-8"))
@@ -261,8 +261,8 @@ class SelfcheckEventDomainCase(Base):
 
     def test_inline_flow_form_still_green(self):
         home = self.make_home(
-            "hooks: {pre_llm_call: [{command: python D:/x/hud_inject.py, timeout: 10}]}\n",
-            [{"event": "pre_llm_call", "command": "python D:/x/hud_inject.py"}])
+            "hooks: {pre_llm_call: [{command: python C:/x/hud_inject.py, timeout: 10}]}\n",
+            [{"event": "pre_llm_call", "command": "python C:/x/hud_inject.py"}])
         r = self.run_check(home)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
@@ -289,56 +289,56 @@ class HookParserCase(Base):
     def test_commented_or_other_event_hooks_ignored(self):
         cfg = ("# hooks:\n"
                "#   pre_llm_call:\n"
-               "#     - command: python D:/x/hud_inject.py\n"
+               "#     - command: python C:/x/hud_inject.py\n"
                "hooks:\n"
                "  pre_tool_call:\n"
-               "    - command: python D:/x/hud_inject.py\n"
+               "    - command: python C:/x/hud_inject.py\n"
                "  pre_llm_call:\n"
-               "    - command: python D:/x/other.py\n")
+               "    - command: python C:/x/other.py\n")
         self.assertEqual(self.hp.hook_commands(cfg), [])
 
     def test_block_inline_and_indent_forms_parsed(self):
-        block = ("hooks:\n  pre_llm_call:\n    - command: python D:/x/hud_inject.py\n"
+        block = ("hooks:\n  pre_llm_call:\n    - command: python C:/x/hud_inject.py\n"
                  "      timeout: 10\n")
-        inline = "hooks: {pre_llm_call: [{command: python D:/x/hud_inject.py}]}\n"
-        deep = "hooks:\n    pre_llm_call:\n        - command: python D:/x/hud_inject.py\n"
-        same_indent = "hooks:\n  pre_llm_call:\n  - command: python D:/x/hud_inject.py\n"
+        inline = "hooks: {pre_llm_call: [{command: python C:/x/hud_inject.py}]}\n"
+        deep = "hooks:\n    pre_llm_call:\n        - command: python C:/x/hud_inject.py\n"
+        same_indent = "hooks:\n  pre_llm_call:\n  - command: python C:/x/hud_inject.py\n"
         for cfg in (block, inline, deep, same_indent):
-            self.assertEqual(self.hp.hook_commands(cfg), ["python D:/x/hud_inject.py"], cfg)
+            self.assertEqual(self.hp.hook_commands(cfg), ["python C:/x/hud_inject.py"], cfg)
 
     def test_inline_yaml_comment_is_stripped_from_command(self):
         cfg = ("hooks:\n  pre_llm_call:\n"
-               "    - command: python D:/x/hud_inject.py  # live\n")
+               "    - command: python C:/x/hud_inject.py  # live\n")
         self.assertEqual(
             self.hp.hook_commands(cfg),
-            ["python D:/x/hud_inject.py"],
+            ["python C:/x/hud_inject.py"],
         )
 
     def test_backup_suffix_is_not_the_live_hook(self):
         cfg = ("hooks:\n  pre_llm_call:\n"
-               "    - command: python D:/x/hud_inject.py.bak-20261024\n")
+               "    - command: python C:/x/hud_inject.py.bak-20261024\n")
         self.assertEqual(self.hp.hook_commands(cfg), [])
 
     def test_tilde_backup_variants_are_not_the_live_hook(self):
-        for path in ("D:/x/hud_inject.py~", "D:/x/~hud_inject.py"):
+        for path in ("C:/x/hud_inject.py~", "C:/x/~hud_inject.py"):
             cfg = ("hooks:\n  pre_llm_call:\n"
                    f"    - command: python {path}\n")
             self.assertEqual(self.hp.hook_commands(cfg), [], path)
 
     def test_quoted_hash_inside_command_is_not_a_comment(self):
         cfg = ("hooks:\n  pre_llm_call:\n"
-               '    - command: "python D:/x/hud_inject.py --tag #1"\n')
+               '    - command: "python C:/x/hud_inject.py --tag #1"\n')
         self.assertEqual(
             self.hp.hook_commands(cfg),
-            ["python D:/x/hud_inject.py --tag #1"],
+            ["python C:/x/hud_inject.py --tag #1"],
         )
 
     def test_command_in_a_comment_is_not_declared(self):
-        cfg = ("hooks:\n  pre_llm_call: []  # 旧: [{command: python D:/x/hud_inject.py}]\n")
+        cfg = ("hooks:\n  pre_llm_call: []  # 旧: [{command: python C:/x/hud_inject.py}]\n")
         self.assertEqual(self.hp.hook_commands(cfg), [])
 
     def test_top_level_hook_key_outside_hooks_block_ignored(self):
-        cfg = "pre_llm_call: python D:/x/hud_inject.py\nhooks:\n  post_tool_call:\n    - command: python D:/x/hud_inject.py\n"
+        cfg = "pre_llm_call: python C:/x/hud_inject.py\nhooks:\n  post_tool_call:\n    - command: python C:/x/hud_inject.py\n"
         self.assertEqual(self.hp.hook_commands(cfg), [])
 
     def test_malformed_scope_is_fail_closed_and_warned(self):
@@ -487,24 +487,24 @@ class HookParserCase(Base):
 
     def test_uppercase_hook_filename_is_recognized(self):
         cfg = ("hooks:\n  pre_llm_call:\n"
-               "    - command: python D:/x/HUD_INJECT.PY\n")
-        self.assertEqual(self.hp.hook_commands(cfg), ["python D:/x/HUD_INJECT.PY"])
+               "    - command: python C:/x/HUD_INJECT.PY\n")
+        self.assertEqual(self.hp.hook_commands(cfg), ["python C:/x/HUD_INJECT.PY"])
 
     def test_approved_commands_event_domain_and_bad_json(self):
         data = json.dumps({"approvals": [
-            {"event": "pre_tool_call", "command": "python D:/x/hud_inject.py"},
-            {"event": "pre_llm_call", "command": "python D:/x/hud_inject.py"},
-            {"event": "pre_llm_call", "command": "python D:/x/other.py"},
+            {"event": "pre_tool_call", "command": "python C:/x/hud_inject.py"},
+            {"event": "pre_llm_call", "command": "python C:/x/hud_inject.py"},
+            {"event": "pre_llm_call", "command": "python C:/x/other.py"},
             "not-a-dict",
         ]})
-        self.assertEqual(self.hp.approved_commands(data), {"python D:/x/hud_inject.py"})
+        self.assertEqual(self.hp.approved_commands(data), {"python C:/x/hud_inject.py"})
         self.assertEqual(self.hp.approved_commands("{oops"), set())
         self.assertEqual(self.hp.approved_commands('["list"]'), set())
         upper = json.dumps({"approvals": [
-            {"event": "pre_llm_call", "command": "python D:/x/HUD_INJECT.PY"},
-            {"event": "pre_llm_call", "command": "python D:/x/hud_inject.py.bak"},
+            {"event": "pre_llm_call", "command": "python C:/x/HUD_INJECT.PY"},
+            {"event": "pre_llm_call", "command": "python C:/x/hud_inject.py.bak"},
         ]})
-        self.assertEqual(self.hp.approved_commands(upper), {"python D:/x/HUD_INJECT.PY"})
+        self.assertEqual(self.hp.approved_commands(upper), {"python C:/x/HUD_INJECT.PY"})
 
 
 # --------------------------------------------------------------------------- #

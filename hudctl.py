@@ -1089,7 +1089,7 @@ MAX_BLOCK_CHARS = 1600
 # 旧值 80 会把「正文 1403 字 + 28 字 session id」这种完全能注进去的保存判成超限。
 BLOCK_MARGIN = 20
 HINT_DEFAULT = "default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
-HINT_OTHER = "{who} bot：优先用 OTUI（build/open-tui-orchestrator）"
+HINT_OTHER = "{who} bot：优先用本档自己的编排机制（delegate_task / cron / 本档工具）"
 
 
 def estimate_block(meta: dict[str, str], body: str, expires) -> int:

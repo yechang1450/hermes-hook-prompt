@@ -342,7 +342,7 @@ class HudCase(unittest.TestCase):
         ctx_default = self.context(self.inject(profile="default")[1])
         self.assertIn("default bot：优先用 Hermes 官方机制", ctx_default)
         ctx_bot = self.context(self.inject(profile="proj-80")[1])
-        self.assertIn("proj-80 bot：优先用 OTUI", ctx_bot)
+        self.assertIn("proj-80 bot：优先用本档自己的编排机制", ctx_bot)
 
 
     def test_selfcheck_warning_when_state_missing(self):

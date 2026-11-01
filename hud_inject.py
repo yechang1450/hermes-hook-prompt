@@ -309,7 +309,7 @@ def main() -> int:
     who = profile or "default"
     hint = ("default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
             if who == "default" else
-            f"{who} bot：优先用 OTUI（build/open-tui-orchestrator）")
+            f"{who} bot：优先用本档自己的编排机制（delegate_task / cron / 本档工具）")
     prefix = f"[HUD·{title}] 生效至 {stamp}（{who}）\n"
     suffix = f"\n\n执行机制建议：{hint}"
     note = _selfcheck_note()
