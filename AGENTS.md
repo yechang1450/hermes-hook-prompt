@@ -134,6 +134,13 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - **提交**：`1fb5fec`（接手时已在本地，.gitignore 兜底）→ `a3f882b`（环境口径）→ `d2fb5b8`（`-z` 坑）→ `bff0ba6`（生效时机/验收）→ `2c689dd`（venv 恢复 + P3 #10）→ `6158189`（selfcheck 解释器体检 + 回归）→ `235bba2`（新增本文件 + 两处过期口径）。全部已推，远端与本地一致。
 - **AGENTS.md 免审约定 + 配置改动**：按用户 2026-11-04 授权，第 5 节写明「本文件的项目说明与操作日志可直接更新、无需另行审批」；并把 Hermes 配置 `security.protected_instruction_files` 由 `true` 改为 **`false`**（`hermes config set`，回读 `false`，config.yaml:2558）。备注：这是**全局闸**，同时覆盖 `AGENTS.md` / `CLAUDE.md` / `SOUL.md` / `.cursorrules`，官方没有单文件豁免开关；以后写 SOUL 等指令文件也不再经过审批闸，靠红线与推仓自检约束。
 
+### 2026-11-05
+
+- **新增 `docs/REINSTALL-v0.22.2.md`**：重装系统后从官方仓库钉装 v0.22.2 的完整流程（网络预检 → 下载安装器 → `-Commit` 一行安装 → 验收 → 关更新提示 → 配模型 → 常见失败 → 重装前清单）。
+  - 依据：`scripts/install.ps1` 1258–1301 行，`-Commit` 先跑 `merge-base --is-ancestor <sha> origin/main`，通过后 `git checkout`，并把 `pinnedCommit` 写进 `.hermes-bootstrap-complete`；实测 `d923a5eb487a17c0a68801bba9ef0f56c81040a8`（v0.22.2）是该分支祖先。
+  - 关键结论：**不要「先装最新再降级」**——新版一运行就写 `session_admissions`，`hermes_cli/update_downgrade_guard.py` 会拒绝降级；手工 checkout 会让带运行时记录的会话在旧版里删不掉。全新 `state.db` 直接钉版本则无此问题。
+  - 安装器用 `Invoke-WebRequest -OutFile` 存成文件再跑（`irm | iex` 传不了参数，且 `exit` 会关窗口）；执行时用 `-ExecutionPolicy Bypass -File … -Commit … -IncludeDesktop`。
+
 ---
 
 ## 7. 接手 checklist（复制粘贴用）

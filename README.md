@@ -302,6 +302,7 @@ python -m unittest discover -s tests -v
 | `docs/KNOWN-ISSUES.md` | 已知问题：P0/P1 判级口径、当前清单（P0/P1 均为 0）、已修复与历史残留 |
 | `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移记录：裸 `python` → 绝对解释器、仓库外副本 → 仓库路径；含逐档清单、验收与回滚（本机 2026-10-31 首次执行、2026-11-04 换机重建） |
 | `AGENTS.md` | **给 Agent 的交接文档**：当前部署形态、运行期文件、已知坑、验收约定、按日期追加的操作日志（接手先读它） |
+| `docs/REINSTALL-v0.22.2.md` | 重装系统后从官方仓库钉装 **v0.22.2** 的完整流程：安装器 `-Commit` 用法、验收到关更新提示、常见失败 |
 | `tests/` | 单元测试（标准库 unittest，共 238）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（15），`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（41：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
