@@ -85,6 +85,18 @@ hermes -p <profile> config get hooks
 
 > 想作用到**所有会话（包括以后新建的）**：面板写 `session_id: any`。它不是「当前这批会话」的快照，而是对所有 session 一律放行。
 
+> **生效时机（源码口径）**：网关在**每次本地会话打开（新建 / 恢复）**时跑 `refresh_profile_hooks()` → `agent.shell_hooks.sync_from_config()`，把 config 里的钩子同步进网关进程。⇒ 装好或改完 config 后，**已经开着的那条会话不会立刻看到面板**；新开会话、或把它重开一次才会同步。本机实测：19:08 装好，之后新开的会话立刻注入；19:07 就在跑的长会话要等下一轮 / 重开。**验收请用新会话，别拿老会话没出现判成失败。**
+
+> **补同意的坑**：`hermes --accept-hooks -z "ok"` 只该用来写 allowlist。若面板此时已启用、正文含「自行推进」类指令，这个一次性会话会**真的照面板开工**（实测它会读仓库、跑测试、直接改代码）。补同意前先 `hudctl.py off`，或把 `HUD_PANEL` 指向一个只含 `session_id: any` 的空面板；细节见 [docs/HOOK-CONFIG-MIGRATION.md](docs/HOOK-CONFIG-MIGRATION.md) §六。
+
+安装完成的验收三件（缺一不算成功）：
+
+```bash
+python selfcheck.py        # 7/7，rc=0
+hermes hooks doctor        # 四项全绿
+tail -3 hud.log            # 出现 inject … entries=k/n（新会话问一句后）
+```
+
 ---
 
 ## 三、面板文件
