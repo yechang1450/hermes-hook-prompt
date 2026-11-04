@@ -10,3 +10,17 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# ===== 运行期/临时/编辑器残留兜底（2026-11-04）=====
+.venv*/
+.pytest_cache/
+.coverage
+.coverage.*
+.tmp-*/
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.swp
+*.swo
+.mypy_cache/
