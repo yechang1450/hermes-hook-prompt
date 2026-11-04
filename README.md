@@ -236,6 +236,17 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 `hud_inject.py` 每轮对比指纹：**更新后第一次注入就会多一行提醒**「Hermes 已更新、机制未复检：先跑 selfcheck.py」；自检通过后提醒自动消失。指纹不变、自检通过时不会多任何一个字。尾行提醒按失败项给不同指引：只有 `panel:*` 失败 → 提示先跑 `hudctl.py check`；只有 `source:*` 失败 → 才提「适配新版」；`config:*`/`allowlist:*` 失败 → 提示按安装步骤补齐声明与同意；不同类同时失败就分行写，避免面板格式问题被误报成版本问题。
 
+**更新后解释器失效的恢复**：`.hud-venv` 的 `pyvenv.cfg` 指向 `%LOCALAPPDATA%\hermes\tools\python-3.14.9+…`；Hermes 更新重装 tools 树时这个目录可能被换掉，venv 随之失效。钩子是 fail-open，表现就是「面板忽然不见了」；而 `selfcheck` 这时**仍可能全绿**——它的端到端用的是跑自检的那个解释器（`sys.executable`），不校验命令串里那一个（见 KNOWN-ISSUES P3 #10）。恢复只需用内置 uv 重建同一路径，**命令串不变、allowlist 不用重新同意**：
+
+```bash
+UV="$LOCALAPPDATA/hermes/tools/uv-<版本>/uv.exe"
+PY="$LOCALAPPDATA/hermes/tools/python-<版本>/python.exe"
+"$UV" venv C:/Users/yecha/.hud-venv --python "$PY"
+python selfcheck.py && hermes hooks doctor
+```
+
+（2026-11-04 用一份副本 venv 实测过这条配方：新 venv 跑 `hud_inject.py` 返回 `context`、rc=0。）
+
 ## 六、怎么验证「真的被听见」
 
 只看注入日志不算。两条断言都要过：

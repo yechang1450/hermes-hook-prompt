@@ -65,6 +65,13 @@ CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12�
 - `set/off/on/scope/use/restore/snapshot` 共用 `panel.md.lock`；锁被别的进程长期占用时，`hudctl` 打印「面板被另一个进程锁住」并 exit 2。
 - 放弃的是**这次写入**，面板保持原样（先写临时文件再 `os.replace`），不会留半份内容。
 
+### 10. `selfcheck` 不校验命令串里的解释器是否存在
+
+- `selfcheck` 的「config」项只比对命令串，端到端又用跑自检的那个解释器（`sys.executable`），**不检查 `hooks.pre_llm_call` 里写的那个绝对路径还在不在**。
+- 后果：Hermes 更新换掉 `tools/python-*` 目录后 `.hud-venv` 失效，钩子 fail-open 静默不注入，而 `selfcheck` 仍可能全绿（本机 2026-11-04 读源码确认：`selfcheck.py:124` 用 `sys.executable`）。
+- 缓解（已写进 README 第五节的「更新后解释器失效的恢复」）：更新后若「面板忽然不见了」，先重建 venv（同一路径），再跑 `selfcheck` + `hooks doctor`；命令串不变，无需重新同意。
+- 要根治得让 config 项去跑一次命令串里的解释器；会改变「失败项」的判定面，留待单独评估。
+
 ---
 
 ## 已修复（留档对账）
