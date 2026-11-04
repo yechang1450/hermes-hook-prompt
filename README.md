@@ -49,7 +49,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 ## 二、安装
 
 要求：Python 3.10+（只用标准库；CI 覆盖 3.10 / 3.12），Hermes 能正常启动。仓库＝五个脚本 + 一份面板样例。
-实测环境：Windows 11、Hermes v0.22.5、Python 3.14.9。
+实测环境：Windows 11、Hermes v0.22.7、Python 3.14.9。
 
 ```bash
 git clone <this-repo> hermes-hook-prompt

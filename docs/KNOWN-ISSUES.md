@@ -12,7 +12,7 @@
 | **P2** | 需要特定条件（攻击者已具备等价权限、特定平台、并发窗口），且有 workaround | 排期修 |
 | **P3** | 体验 / 成本 / 隐私卫生 / 文档 | 顺手改 |
 
-**当前 P0 = 0，P1 = 0，P2 = 0。** 盘点时间 2026-10-31（本机单档 default：237/237 本地通过、`selfcheck` 7/7、`hooks doctor` 四项绿）。
+**当前 P0 = 0，P1 = 0，P2 = 0。** 盘点时间 2026-11-04（本机单档 default、Hermes v0.22.7：237/237 本地通过、`selfcheck` 7/7、`hooks doctor` 四项绿）。
 CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12）。本机 2026-10-31 **无法查询远端运行结果**——无 `gh`、SSH 未配置、https 直连被重置；本地全量测试已通过，故这里不写「CI 绿」。
 
 ---

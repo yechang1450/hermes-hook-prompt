@@ -1,6 +1,6 @@
 # 钩子配置迁移：裸 `python` → 绝对解释器；`temp/hud/` → 仓库路径
 
-> **状态：本机 2026-10-31 已执行（单档 default）。**
+> **状态：本机 2026-10-31 已执行（单档 default）；2026-11-04 换机重装后在 Hermes v0.22.7 上按同一口径重建（解释器 `C:/Users/yecha/.hud-venv/Scripts/python.exe`，验收 `hooks doctor` 四项绿 + `selfcheck` 7/7）。**
 > 实际落地形态：`<专用 venv>/Scripts/python.exe <仓库>/hud_inject.py`（本机具体路径见 `hermes config get hooks`）。
 > 改动量：`config set` 1 次、`--accept-hooks` 1 次；验收 `hermes hooks doctor` 四项全绿、`selfcheck.py` 7/7、注入日志已落仓库 `hud.log`、`hudctl impact` 显示该档全部会话生效。
 > 本机当前**只有 default 一个 profile**（多 bot 档未恢复）；下方正文保留多档通用流程，将来恢复多档时按第五节逐档执行。
