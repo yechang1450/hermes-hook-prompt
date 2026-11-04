@@ -148,6 +148,8 @@ for p in $(ls "$H/profiles"); do hermes -p "$p" --accept-hooks -z "ok"; done
 
 `-z` 是一次性会话，只为了让该档的钩子被注册并写进 allowlist；它本身不需要面板生效。
 
+> **坑（2026-11-04 实测）**：如果面板此时已经启用且正文含「自行推进」这类指令，这个一次性会话会**真的照着面板开工**——它会读仓库、跑测试、直接打 patch 改代码（实测改了 3 个脚本 + 1 个测试文件，还引入了一条 NameError 路径）。所以补同意之前先 `python hudctl.py off`，跑完 `on` 还原；或者把 `HUD_PANEL` 指向一个只含 `session_id: any` 的空面板再跑。绝不要「面板开着、顺手跑个 -z」。
+
 ## 七、5. 验收（同一张清单，17/17 全绿才算完成）
 
 1. `hermes -p <档> config get hooks` → 命令 = `<绝对解释器> <仓库>/hud_inject.py`，`timeout: 10`；
