@@ -12,7 +12,7 @@
 | **P2** | 需要特定条件（攻击者已具备等价权限、特定平台、并发窗口），且有 workaround | 排期修 |
 | **P3** | 体验 / 成本 / 隐私卫生 / 文档 | 顺手改 |
 
-**当前 P0 = 0，P1 = 0，P2 = 0。** 盘点时间 2026-11-04（本机单档 default、Hermes v0.22.7：237/237 本地通过、`selfcheck` 7/7、`hooks doctor` 四项绿）。
+**当前 P0 = 0，P1 = 0，P2 = 0。** 盘点时间 2026-11-04（本机单档 default、Hermes v0.22.7：238/238 本地通过、`selfcheck` 7/7、`hooks doctor` 四项绿）。
 CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12）。本机 2026-10-31 **无法查询远端运行结果**——无 `gh`、SSH 未配置、https 直连被重置；本地全量测试已通过，故这里不写「CI 绿」。
 
 ---
@@ -65,13 +65,6 @@ CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12�
 - `set/off/on/scope/use/restore/snapshot` 共用 `panel.md.lock`；锁被别的进程长期占用时，`hudctl` 打印「面板被另一个进程锁住」并 exit 2。
 - 放弃的是**这次写入**，面板保持原样（先写临时文件再 `os.replace`），不会留半份内容。
 
-### 10. `selfcheck` 不校验命令串里的解释器是否存在
-
-- `selfcheck` 的「config」项只比对命令串，端到端又用跑自检的那个解释器（`sys.executable`），**不检查 `hooks.pre_llm_call` 里写的那个绝对路径还在不在**。
-- 后果：Hermes 更新换掉 `tools/python-*` 目录后 `.hud-venv` 失效，钩子 fail-open 静默不注入，而 `selfcheck` 仍可能全绿（本机 2026-11-04 读源码确认：`selfcheck.py:124` 用 `sys.executable`）。
-- 缓解（已写进 README 第五节的「更新后解释器失效的恢复」）：更新后若「面板忽然不见了」，先重建 venv（同一路径），再跑 `selfcheck` + `hooks doctor`；命令串不变，无需重新同意。
-- 要根治得让 config 项去跑一次命令串里的解释器；会改变「失败项」的判定面，留待单独评估。
-
 ---
 
 ## 已修复（留档对账）
@@ -98,6 +91,8 @@ CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12�
 - **`hud.log` 可被 payload 换行注入伪造行**（P3）：`session_id` / `profile` 原样落盘，塞 `\n` 就能伪造一条 `inject … entries=9/9`。修法：`log()` 唯一写入口把控制符/换行折叠成空格（含 ESC），一条日志永远一行。回归：`LogSanitizeCase`。
 - **`hudctl scope` 改写双标注条目会吃掉续行缩进**（P3）：`   [scope: all] - 续行` 去标签后顶格成 `- 续行`，下一次解析变成新条目（内容被提升、作用域另算）。修法：`hud_panel.strip_leading_scope()` 保留原缩进，注入端/`entry_texts`/`scope` 共用。回归：`ScopeIndentCase`。
 - **截断吃掉尾行的自检警告**（P3）：先拼整块再切前 1600 字，面板一长「⚠ 机制未自检 / 已更新」与「执行机制建议」正好被切掉。修法：`_compose_block()` 先给尾行留预算，只截正文并补截断标记。回归：`TruncationCase`。
+
+- **`selfcheck` 不校验命令串里的解释器是否存在**（原 P3 #10，2026-11-04 修）：config 项只比对命令串，端到端又用跑自检的那个解释器（`sys.executable`），`.hud-venv` 失效后钩子静默不注入而自检仍绿。修法：`config:hooks.pre_llm_call` 增加解释器体检——**绝对路径**必须存在且能跑 `import sys`（裸 `python` 不判红，避免跨机假红；成功文案区分「已校验 / 未校验」）。回归：`tests/test_selfcheck.py::test_config_check_fails_when_absolute_interpreter_is_gone`。
 
 ## 历史残留（不阻塞）
 

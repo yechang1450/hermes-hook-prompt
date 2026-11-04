@@ -209,10 +209,12 @@ def check() -> tuple[list[dict], bool, list[str]]:
 
     cfg = _read(PROFILE_DIR / "config.yaml")
     declared = hud_panel.hook_commands(cfg) if hud_panel is not None else []
-    add("config:hooks.pre_llm_call", bool(declared),
-        f"{PROFILE_DIR / 'config.yaml'} 缺 pre_llm_call 事件下指向 hud_inject.py 的声明"
-        "（只声明在 pre_tool_call 等其它事件下不算数）",
-        f"已声明：{PROFILE_DIR / 'config.yaml'} → hud_inject.py（pre_llm_call 事件下）")
+    interp_ok, interp_detail, interp_checked = _interpreter_health(declared)
+    add("config:hooks.pre_llm_call", bool(declared) and interp_ok,
+        interp_detail or (f"{PROFILE_DIR / 'config.yaml'} 缺 pre_llm_call 事件下指向 hud_inject.py 的声明"
+                          "（只声明在 pre_tool_call 等其它事件下不算数）"),
+        (f"已声明且解释器可运行：{PROFILE_DIR / 'config.yaml'} → hud_inject.py") if interp_checked
+        else (f"已声明（解释器是裸命令、未校验）：{PROFILE_DIR / 'config.yaml'} → hud_inject.py"))
 
     allow = _read(PROFILE_DIR / "shell-hooks-allowlist.json")
     approved_cmds = hud_panel.approved_commands(allow) if hud_panel is not None else set()
@@ -230,6 +232,35 @@ def check() -> tuple[list[dict], bool, list[str]]:
     notices.extend(panel_notices)
 
     return results, all(r["ok"] for r in results), notices
+
+
+def _interpreter_health(commands: list[str]) -> tuple[bool, str, bool]:
+    """命令串里的解释器还在不在、还能不能跑。
+
+    只对**绝对路径**判红：裸 `python` 由 PATH 决定，判存在会在别的机器上假红；这类写法
+    本身就是安装错误，交给文档提醒，不进失败判定（``checked`` 返回 False）。返回
+    ``(ok, detail, checked)``：``checked`` 表示是否真的验过一个绝对路径解释器。
+    """
+    checked = False
+    for command in commands:
+        parts = command.split()
+        if not parts:
+            continue
+        exe = parts[0].strip('"').strip("'")
+        absolute = (len(exe) >= 3 and exe[1] == ":" and exe[2] in "\\/") or exe.startswith("/")
+        if not absolute:
+            continue
+        checked = True
+        if not os.path.isfile(exe):
+            return False, (f"解释器不存在：{exe}（Hermes 更新换掉 tools 树后常见；"
+                           "用内置 uv 重建 venv，见 README 第五节）"), True
+        try:
+            proc = subprocess.run([exe, "-c", "import sys"], capture_output=True, timeout=10)
+        except Exception as exc:  # 超时 / 权限 / 无法启动
+            return False, f"解释器无法启动：{exe}（{type(exc).__name__}）", True
+        if proc.returncode != 0:
+            return False, f"解释器无法运行（rc={proc.returncode}）：{exe}", True
+    return True, "", checked
 
 
 def _write_state(payload: dict) -> None:

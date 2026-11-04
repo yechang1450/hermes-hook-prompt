@@ -203,5 +203,19 @@ class SelfcheckCase(unittest.TestCase):
         self.assertIn("找不到", failed["source:上下文注入点"])
 
 
+    def test_config_check_fails_when_absolute_interpreter_is_gone(self):
+        """命令串写的是绝对路径、但解释器已不存在时必须判红（2026-11-04 venv 失效盲区回归）。"""
+        fake = str(self.home / "no-such-python.exe")
+        command = f"{fake} hud_inject.py"
+        (self.home / "config.yaml").write_text(
+            f"hooks:\n  pre_llm_call:\n    - command: {command}\n      timeout: 10\n", encoding="utf-8")
+        (self.home / "shell-hooks-allowlist.json").write_text(
+            json.dumps({"approvals": [{"event": "pre_llm_call", "command": command}]}), encoding="utf-8")
+        r = self.run_check()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        failed = {c["check"]: c["detail"] for c in self.state_data()["checks"] if not c["ok"]}
+        self.assertIn("解释器不存在", failed["config:hooks.pre_llm_call"])
+
+
 if __name__ == "__main__":
     unittest.main()

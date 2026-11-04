@@ -224,7 +224,7 @@ Hermes 更新后，钩子实现可能换文件（本机 10-23 的更新就把 `p
 python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 ```
 
-查七项：模块（`hud_panel.py` 在不在）、事件还在不在、注入点还在不在、本档 config 声明、allowlist 同意、端到端注入、面板格式。config / allowlist 两项按 **`pre_llm_call` 事件域**判定：`hud_inject.py` 只挂在 `pre_tool_call`、或 `pre_llm_call` 下挂的是别的脚本，都算「未声明 / 未同意」（旧实现只做子串判断，会假绿）。
+查七项：模块（`hud_panel.py` 在不在）、事件还在不在、注入点还在不在、本档 config 声明、allowlist 同意、端到端注入、面板格式。config / allowlist 两项按 **`pre_llm_call` 事件域**判定：`hud_inject.py` 只挂在 `pre_tool_call`、或 `pre_llm_call` 下挂的是别的脚本，都算「未声明 / 未同意」（旧实现只做子串判断，会假绿）。**config 项还会顺带体检命令串里的绝对路径解释器**（必须存在、且能跑 `import sys`）；裸 `python` 不判红——那是 PATH 依赖，跨机判存在会假红。
 
 三条口径很重要（都是防假红）：
 
@@ -236,7 +236,7 @@ python selfcheck.py          # 0=全绿；2=有失败（需要适配）
 
 `hud_inject.py` 每轮对比指纹：**更新后第一次注入就会多一行提醒**「Hermes 已更新、机制未复检：先跑 selfcheck.py」；自检通过后提醒自动消失。指纹不变、自检通过时不会多任何一个字。尾行提醒按失败项给不同指引：只有 `panel:*` 失败 → 提示先跑 `hudctl.py check`；只有 `source:*` 失败 → 才提「适配新版」；`config:*`/`allowlist:*` 失败 → 提示按安装步骤补齐声明与同意；不同类同时失败就分行写，避免面板格式问题被误报成版本问题。
 
-**更新后解释器失效的恢复**：`.hud-venv` 的 `pyvenv.cfg` 指向 `%LOCALAPPDATA%\hermes\tools\python-3.14.9+…`；Hermes 更新重装 tools 树时这个目录可能被换掉，venv 随之失效。钩子是 fail-open，表现就是「面板忽然不见了」；而 `selfcheck` 这时**仍可能全绿**——它的端到端用的是跑自检的那个解释器（`sys.executable`），不校验命令串里那一个（见 KNOWN-ISSUES P3 #10）。恢复只需用内置 uv 重建同一路径，**命令串不变、allowlist 不用重新同意**：
+**更新后解释器失效的恢复**：`.hud-venv` 的 `pyvenv.cfg` 指向 `%LOCALAPPDATA%\hermes\tools\python-3.14.9+…`；Hermes 更新重装 tools 树时这个目录可能被换掉，venv 随之失效。钩子是 fail-open，表现就是「面板忽然不见了」。2026-11-04 起 `selfcheck` 的 config 项会**顺带验证命令串里的解释器**（存在且能 `import sys`），更新后先跑它就能发现；恢复只需用内置 uv 重建同一路径，**命令串不变、allowlist 不用重新同意**：
 
 ```bash
 UV="$LOCALAPPDATA/hermes/tools/uv-<版本>/uv.exe"
@@ -269,7 +269,7 @@ python selfcheck.py && hermes hooks doctor
 
 ## 七、测试
 
-237 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+238 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -301,7 +301,7 @@ python -m unittest discover -s tests -v
 | `docs/i-robot-hud.svg` | 设计灵感示意（原创绘制） |
 | `docs/KNOWN-ISSUES.md` | 已知问题：P0/P1 判级口径、当前清单（P0/P1 均为 0）、已修复与历史残留 |
 | `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移记录：裸 `python` → 绝对解释器、仓库外副本 → 仓库路径；含逐档清单、验收与回滚（**本机 2026-10-31 已按单档执行**） |
-| `tests/` | 单元测试（标准库 unittest，共 237）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（14）、`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（41：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
+| `tests/` | 单元测试（标准库 unittest，共 238）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（15），`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（41：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 
