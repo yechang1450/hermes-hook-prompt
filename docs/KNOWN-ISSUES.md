@@ -13,7 +13,7 @@
 | **P3** | 体验 / 成本 / 隐私卫生 / 文档 | 顺手改 |
 
 **当前 P0 = 0，P1 = 0，P2 = 0。** 盘点时间 2026-11-05（本机单档 default、Hermes v0.22.2（stable，钉 `d923a5eb`）：240 例通过、11 例跳过、`selfcheck` 7/7、`hooks doctor` 四项绿）。
-CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12）。本机 2026-11-04：SSH 通道已可用（`ssh.github.com:443`），但无 `gh`、`api.github.com` 不通，仍**无法查询 Actions 运行结果**；本地 238 例全绿，故这里不写「CI 绿」。
+CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12）。本机 2026-11-05 起可用 HTTPS API 查询 Actions（token 在用户环境变量里，不写入仓库）；公开后 `tests` 工作流在 Ubuntu/Windows × 3.10/3.12 上通过。
 
 ---
 
