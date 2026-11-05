@@ -100,7 +100,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 推之前过三项自检：凭据、隐私（真实会话 id / 人名）、本机绝对路径。
 - 测试：`python -m unittest discover -s tests`（240 例，约 60 s，纯标准库，不碰真实面板/日志）。
 - 改了 `hud_inject.py` 要重跑 `selfcheck.py`；改了面板要用 `hudctl.py`（禁止手写 panel.md 绕过校验）。
-- 一次性文件放 `<workspace>	emp\`，不要留在仓库里。
+- 一次性文件放 `<workspace>\temp\`，不要留在仓库里。
 - 本 session 只负责这一个项目；别的仓/别的对话不碰。Hermes 重启/停止、改 config、改记忆都属红线，需用户明确授权。
 
 ---
