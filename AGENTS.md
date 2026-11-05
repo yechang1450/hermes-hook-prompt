@@ -149,6 +149,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
     2. 第 4 节第 4 条的 iLink 结论改为「2026-11-04 在 v0.22.7 上实测；v0.22.2 未单独复测」，不再把版本行为说成当前版本的定论。
     3. `security.protected_instruction_files` 被重装重置回 `true`，已 `hermes config set … false`（回读 `false`）——免审约定恢复生效。
   - 已知并发：本次改动期间另一条会话（标题 `Review hermes-hook-prompt pr`）在同一仓上并行改文档，最终以合并后的内容提交；后续接手先 `git status` 确认无第二个写者。
+  - **收尾**：`%LOCALAPPDATA%\hermes\tools\.install.lock` 是安装器遗留的 0 字节锁，无进程持有（`CreateFile(..., share=0)` 可打开），但会让 `hermes hooks doctor` 卡在「waiting for .install.lock」；删除后 doctor 恢复四项绿，之后未再生成。
 
 ---
 
