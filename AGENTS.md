@@ -55,7 +55,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
-- allowlist：已批准（`approved_at 2026-11-05T14:46:49Z`）
+- allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
 - 面板：924 字正文 / 整块约 1037 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
@@ -152,7 +152,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - **收尾**：`%LOCALAPPDATA%\hermes\tools\.install.lock` 是安装器遗留的 0 字节锁，无进程持有（`CreateFile(..., share=0)` 可打开），但会让 `hermes hooks doctor` 卡在「waiting for .install.lock」；删除后 doctor 恢复四项绿，之后未再生成。
   - **面板第 3 条改版**（按用户口径）：改为「自主推进：不撞红线、不被真阻塞、不需要你拍板时，发挥主观能动性…非必要不把方向或下一步抛回，不是必须要我看或者操作的，尽量后台执行或者 headless；积极用 delegate_task…」。工具 `hudctl.py set --body <temp> --ttl 1178.499h`；验收 `check` 绿（924 字 / 整块约 1048 字）、`preview` 10→10 条且生效会话 37→37 不变。
   - **事实更正（uv 版本口径）**：v0.22.2 的安装脚本钉的是 **uv 0.12.3**（`scripts/install.ps1:79 UvPinVersion`，`%LOCALAPPDATA%\hermes\tools\facts.json` 同值）；0.13.5 是 v0.22.7 遗留，17:44 依赖整理后 tools 树里只剩 0.12.3。`.hud-venv` 已用 0.12.3 重建（`pyvenv.cfg` 记 `uv = 0.12.3`），面板第 4 条与 README / HOOK-CONFIG-MIGRATION / panel-full-text 同步改为 **uv 0.12.3**；`selfcheck` 7/7、`hooks doctor` 四项绿不变。
-  - **默认改为「全部会话 + 永久有效」**：面板 `expires_at: never`（`hudctl set --ttl never`，正文 924 字 / 整块约 1037 字），`panel.example.md` 同步；`hud_inject` / `hudctl` 全面支持 `never`——`status` 显示「永久有效」、注入头行「长期有效」、`set` 不给 `--ttl` 沿用当前到期（永久不会被悄悄缩成 12 小时），`on/restore/use` 也接受 `--ttl never`。新增 2 条回归，全量 **240 例**通过 / 11 跳过；README 重写默认说明并补 `--ttl never` 用法。`hud_inject.py` 改动后已 `hooks revoke` + 重新同意（14:46:49Z），`doctor` 四项绿。
+  - **默认改为「全部会话 + 永久有效」**：面板 `expires_at: never`（`hudctl set --ttl never`，正文 924 字 / 整块约 1037 字），`panel.example.md` 同步；`hud_inject` / `hudctl` 全面支持 `never`——`status` 显示「永久有效」、注入头行「长期有效」、`set` 不给 `--ttl` 沿用当前到期（永久不会被悄悄缩成 12 小时），`on/restore/use` 也接受 `--ttl never`。新增 2 条回归，全量 **240 例**通过 / 11 跳过；README 重写默认说明并补 `--ttl never` 用法。代码定稿后于 17:06:36Z 再次 `hooks revoke` + 重新同意（git 操作改变了脚本 mtime），`doctor` 四项绿。
   - **历史重写（用户 2026-11-05 明确授权，含 force push）**：用 `git rebase --onto` 去掉 `AGENTS.md` 历史里的真实会话 id（原 `0492299`），`git push --force` 覆盖远端 `master`。哈希映射：`0492299→e02bd96`、`bdbf8c8→8020bdb`，后续提交同步变化；重写后工作树与原 `3591ad3` 完全一致。重写前 `git bundle` 备份在 `temp/hermes-hook-prompt-pre-rewrite-20261105.bundle`（未推送）。
   - **仓库公开（用户 2026-11-05 指令）**：用本机用户环境变量里的 GitHub token（值未写入仓库）调用 API 将 `private` 改为 `false`；复核 `visibility: public`、匿名 `GET` 200。公开后重新克隆校验：历史无真实会话 id，仓库无 `panel.md` / `hud.log` / `state/` 等运行期文件；`tests` 工作流在 Ubuntu/Windows × Python 3.10/3.12 上运行。
 
