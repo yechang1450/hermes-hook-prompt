@@ -5,8 +5,8 @@
 
 - 仓库：`<repo>`
 - 远端：`ssh://git@ssh.github.com:443/yechang1450/hermes-hook-prompt.git`（只有 `master` 一个分支）
-- 本机运行环境：Hermes **v0.22.7**（Windows 11，单档 `default`），Python 3.14.9
-- 最后一次更新：2026-11-04
+- 本机运行环境：Hermes **v0.22.2**（stable，钉 `d923a5eb`；Windows 11，单档 `default`），Python 3.14.7
+- 最后一次更新：2026-11-05
 
 ---
 
@@ -51,13 +51,13 @@ hermes hooks doctor
 tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 ```
 
-当前实测（2026-11-04 23:2x）：
+当前实测（2026-11-05 17:35，Hermes v0.22.2 stable）：
 
-- 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes 内置 uv + 内置 python 3.14.9 建，仓库外，纯标准库不需要装包）
+- 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.13.5 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
-- allowlist：已批准（`approved_at 2026-11-04T11:22:28Z`）
-- 面板：883 字正文 / 整块约 1007 字（上限 1600），`session_id: any`，到期 `2026-12-25T00:13:16+08:00`
-- 自检 7/7、`hooks doctor` 四项绿、单元测试 **238** 个全绿
+- allowlist：已批准（`approved_at 2026-11-05T09:32:46Z`）
+- 面板：895 字正文 / 整块约 1019 字（上限 1600），`session_id: any`，到期 `2026-12-25T00:13:13+08:00`
+- 自检 7/7、`hooks doctor` 四项绿、单元测试 **238** 例（11 跳过）全绿
 
 ---
 
@@ -86,8 +86,8 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 
 1. **生效时机**：网关照「本地会话打开（新建/恢复）」时同步 shell hook（`refresh_profile_hooks()` → `sync_from_config()`）。⇒ 装好/改完 config 后，**已经开着的那条会话不会立刻有面板**，要新会话或重开。验收必须用新会话。
 2. **`-z` 补同意的坑**：`hermes --accept-hooks -z "ok"` 会起一个**真实的一次性会话**。如果面板此时已启用、正文含「自行推进」类指令，它真的会照做（本机 2026-11-04 实测：它读仓库、跑测试、直接 patch 了 3 个脚本 + 1 个测试，还引入一个 NameError 路径）。补同意前先 `python hudctl.py off`，跑完再 `on`；或把 `HUD_PANEL` 指向空面板。
-3. **解释器会随 Hermes 更新失效**：`.hud-venv` 的 `pyvenv.cfg` 指向 `%LOCALAPPDATA%\hermes\tools\python-3.14.9+…`，Hermes 换 tools 树后 venv 坏掉，钩子 fail-open = 面板「忽然消失」。恢复：内置 uv 在**同一路径**重建 venv，命令串不变、allowlist 不用重新同意（README 第五节有配方）。2026-11-04 起 `selfcheck` 的 config 项会验命令串里的绝对路径解释器（存在 + 能 `import sys`），所以能提前发现。
-4. **不要给微信做「自动重启网关」型看门狗**：v0.22.7 的 iLink 适配器**没有周期心跳**（只在 Connected/Disconnected/inbound 打日志），「几小时没日志」是正常空闲，按这个判死会误伤，而重启网关会把桌面会话一起重启。旧机那版看护件已归档在 `temp\archive-20261104-weixin-guard\`（README 里写了原因），不要重新挂。
+3. **解释器会随 Hermes 更新失效**：`.hud-venv` 的 `pyvenv.cfg` 指向 `%LOCALAPPDATA%\hermes\tools\python-3.14.7+…`，Hermes 换 tools 树后 venv 坏掉，钩子 fail-open = 面板「忽然消失」。恢复：内置 uv 在**同一路径**重建 venv，命令串不变、allowlist 不用重新同意（README 第五节有配方）。2026-11-04 起 `selfcheck` 的 config 项会验命令串里的绝对路径解释器（存在 + 能 `import sys`），所以能提前发现。
+4. **不要给微信做「自动重启网关」型看门狗**：Hermes 的 iLink 适配器**没有周期心跳**（2026-11-04 在 v0.22.7 上实测：只在 Connected/Disconnected/inbound 打日志；v0.22.2 未单独复测），「几小时没日志」是正常空闲，按这个判死会误伤，而重启网关会把桌面会话一起重启。旧机那版看护件已归档在 `temp\archive-20261104-weixin-guard\`（README 里写了原因），不要重新挂。
 5. **面板里的绝对路径会泄露到上下文**：面板正文会原样注入模型，别把密钥/内网地址写进去；`panel.md` 权限按 `SECURITY.md` 收紧。
 6. **日志会记会话 id**：分享 `hud.log` 前设 `HUD_LOG_SESSIONS=0`（只记 sha256 前 8 位）。
 
@@ -140,6 +140,15 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 依据：`scripts/install.ps1` 1258–1301 行，`-Commit` 先跑 `merge-base --is-ancestor <sha> origin/main`，通过后 `git checkout`，并把 `pinnedCommit` 写进 `.hermes-bootstrap-complete`；实测 `d923a5eb487a17c0a68801bba9ef0f56c81040a8`（v0.22.2）是该分支祖先。
   - 关键结论：**不要「先装最新再降级」**——新版一运行就写 `session_admissions`，`hermes_cli/update_downgrade_guard.py` 会拒绝降级；手工 checkout 会让带运行时记录的会话在旧版里删不掉。全新 `state.db` 直接钉版本则无此问题。
   - 安装器用 `Invoke-WebRequest -OutFile` 存成文件再跑（`irm | iex` 传不了参数，且 `exit` 会关窗口）；执行时用 `-ExecutionPolicy Bypass -File … -Commit … -IncludeDesktop`。
+
+- **重装钉装 v0.22.2 后：HUD 复建 + 口径对齐（17:2x–17:4x）**
+  - 解释器：用**内置** uv 0.13.5 + 内置 python 3.14.7 在 `%USERPROFILE%\.hud-venv` 重建 venv（仓库外，不装包）；命令串不变，allowlist 沿用 2026-11-05T09:32:46Z 的批准，**未重新同意**。
+  - 验收：`selfcheck` 7/7（指纹 `de94c71cc0f3a5b4`）、`hooks doctor` 四项绿、`hudctl.py check` 绿（895 字 / 整块 1019 字）、单测 **238 例通过 / 11 跳过**。
+  - **事实更正**（按第 5 节②）：
+    1. 环境口径 v0.22.7 / Python 3.14.9 → **v0.22.2（stable，钉 `d923a5eb`）/ 3.14.7**（正文第 8、56、89 行）。
+    2. 第 4 节第 4 条的 iLink 结论改为「2026-11-04 在 v0.22.7 上实测；v0.22.2 未单独复测」，不再把版本行为说成当前版本的定论。
+    3. `security.protected_instruction_files` 被重装重置回 `true`，已 `hermes config set … false`（回读 `false`）——免审约定恢复生效。
+  - 已知并发：本次改动期间另一会话（`20260101_000000_abcdef`）在同一仓上并行改文档，最终以合并后的内容提交；后续接手先 `git status` 确认无第二个写者。
 
 ---
 
