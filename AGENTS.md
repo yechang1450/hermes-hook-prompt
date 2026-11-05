@@ -53,10 +53,10 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 
 当前实测（2026-11-05 17:35，Hermes v0.22.2 stable）：
 
-- 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.13.5 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
+- 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T09:32:46Z`）
-- 面板：895 字正文 / 整块约 1019 字（上限 1600），`session_id: any`，到期 `2026-12-25T00:13:13+08:00`
+- 面板：924 字正文 / 整块约 1048 字（上限 1600），`session_id: any`，到期 `2026-12-25T00:13:22+08:00`
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **238** 例（11 跳过）全绿
 
 ---
@@ -142,7 +142,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 安装器用 `Invoke-WebRequest -OutFile` 存成文件再跑（`irm | iex` 传不了参数，且 `exit` 会关窗口）；执行时用 `-ExecutionPolicy Bypass -File … -Commit … -IncludeDesktop`。
 
 - **重装钉装 v0.22.2 后：HUD 复建 + 口径对齐（17:2x–17:4x）**
-  - 解释器：用**内置** uv 0.13.5 + 内置 python 3.14.7 在 `%USERPROFILE%\.hud-venv` 重建 venv（仓库外，不装包）；命令串不变，`--accept-hooks` 于 2026-11-05T09:32:46Z 重新写入批准（重建 venv 不改变命令串，故之后无需再次同意）。
+  - 解释器：用**内置** uv 0.12.3 + 内置 python 3.14.7 在 `%USERPROFILE%\.hud-venv` 重建 venv（仓库外，不装包）；命令串不变，`--accept-hooks` 于 2026-11-05T09:32:46Z 重新写入批准（重建 venv 不改变命令串，故之后无需再次同意）。
   - 验收：`selfcheck` 7/7（指纹 `de94c71cc0f3a5b4`）、`hooks doctor` 四项绿、`hudctl.py check` 绿（895 字 / 整块 1019 字）、单测 **238 例通过 / 11 跳过**。
   - **事实更正**（按第 5 节②）：
     1. 环境口径 v0.22.7 / Python 3.14.9 → **v0.22.2（stable，钉 `d923a5eb`）/ 3.14.7**（正文第 8、56、89 行）。
@@ -151,6 +151,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 已知并发：本次改动期间另一条会话（标题 `Review hermes-hook-prompt pr`）在同一仓上并行改文档，最终以合并后的内容提交；后续接手先 `git status` 确认无第二个写者。
   - **收尾**：`%LOCALAPPDATA%\hermes\tools\.install.lock` 是安装器遗留的 0 字节锁，无进程持有（`CreateFile(..., share=0)` 可打开），但会让 `hermes hooks doctor` 卡在「waiting for .install.lock」；删除后 doctor 恢复四项绿，之后未再生成。
   - **面板第 3 条改版**（按用户口径）：改为「自主推进：不撞红线、不被真阻塞、不需要你拍板时，发挥主观能动性…非必要不把方向或下一步抛回，不是必须要我看或者操作的，尽量后台执行或者 headless；积极用 delegate_task…」。工具 `hudctl.py set --body <temp> --ttl 1178.499h`；验收 `check` 绿（924 字 / 整块约 1048 字）、`preview` 10→10 条且生效会话 37→37 不变。
+  - **事实更正（uv 版本口径）**：v0.22.2 的安装脚本钉的是 **uv 0.12.3**（`scripts/install.ps1:79 UvPinVersion`，`%LOCALAPPDATA%\hermes\tools\facts.json` 同值）；0.13.5 是 v0.22.7 遗留，17:44 依赖整理后 tools 树里只剩 0.12.3。`.hud-venv` 已用 0.12.3 重建（`pyvenv.cfg` 记 `uv = 0.12.3`），面板第 4 条与 README / HOOK-CONFIG-MIGRATION / panel-full-text 同步改为 **uv 0.12.3**；`selfcheck` 7/7、`hooks doctor` 四项绿不变。
 
 ---
 

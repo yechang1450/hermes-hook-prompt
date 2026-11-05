@@ -245,7 +245,7 @@ PY="$LOCALAPPDATA/hermes/tools/python-<版本>/python.exe"
 python selfcheck.py && hermes hooks doctor
 ```
 
-（2026-11-05 在 Hermes v0.22.2 上实测过这条配方：内置 uv 0.13.5 + python 3.14.7 重建 `~/.hud-venv`，跑 `hud_inject.py` 返回 `context`、rc=0。）
+（2026-11-05 在 Hermes v0.22.2 上实测过这条配方：内置 uv 0.12.3 + python 3.14.7 重建 `~/.hud-venv`，跑 `hud_inject.py` 返回 `context`、rc=0。）
 
 ## 六、怎么验证「真的被听见」
 
