@@ -142,13 +142,13 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 安装器用 `Invoke-WebRequest -OutFile` 存成文件再跑（`irm | iex` 传不了参数，且 `exit` 会关窗口）；执行时用 `-ExecutionPolicy Bypass -File … -Commit … -IncludeDesktop`。
 
 - **重装钉装 v0.22.2 后：HUD 复建 + 口径对齐（17:2x–17:4x）**
-  - 解释器：用**内置** uv 0.13.5 + 内置 python 3.14.7 在 `%USERPROFILE%\.hud-venv` 重建 venv（仓库外，不装包）；命令串不变，allowlist 沿用 2026-11-05T09:32:46Z 的批准，**未重新同意**。
+  - 解释器：用**内置** uv 0.13.5 + 内置 python 3.14.7 在 `%USERPROFILE%\.hud-venv` 重建 venv（仓库外，不装包）；命令串不变，`--accept-hooks` 于 2026-11-05T09:32:46Z 重新写入批准（重建 venv 不改变命令串，故之后无需再次同意）。
   - 验收：`selfcheck` 7/7（指纹 `de94c71cc0f3a5b4`）、`hooks doctor` 四项绿、`hudctl.py check` 绿（895 字 / 整块 1019 字）、单测 **238 例通过 / 11 跳过**。
   - **事实更正**（按第 5 节②）：
     1. 环境口径 v0.22.7 / Python 3.14.9 → **v0.22.2（stable，钉 `d923a5eb`）/ 3.14.7**（正文第 8、56、89 行）。
     2. 第 4 节第 4 条的 iLink 结论改为「2026-11-04 在 v0.22.7 上实测；v0.22.2 未单独复测」，不再把版本行为说成当前版本的定论。
     3. `security.protected_instruction_files` 被重装重置回 `true`，已 `hermes config set … false`（回读 `false`）——免审约定恢复生效。
-  - 已知并发：本次改动期间另一会话（`20260101_000000_abcdef`）在同一仓上并行改文档，最终以合并后的内容提交；后续接手先 `git status` 确认无第二个写者。
+  - 已知并发：本次改动期间另一条会话（标题 `Review hermes-hook-prompt pr`）在同一仓上并行改文档，最终以合并后的内容提交；后续接手先 `git status` 确认无第二个写者。
 
 ---
 
