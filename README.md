@@ -54,7 +54,7 @@ Hermes 的 `config.yaml` 里有一个官方的 `hooks:` 配置块，用来声明
 ```bash
 git clone <this-repo> hermes-hook-prompt
 cd hermes-hook-prompt
-cp panel.example.md panel.md      # 然后按需改正文与 expires_at
+cp panel.example.md panel.md      # 默认 any + never（永久）；按需改正文
 ```
 
 声明钩子（**每个 profile 一次**；Windows 路径注意用 `/`）。两个路径都写**绝对路径**：解释器用专用 venv（或任何不随 PATH 变的位置），脚本指向**仓库里那份**。不要用裸 `python`——PATH 里任一可写目录都能顶替一个「每轮以你身份执行」的程序；也不要用仓库外的运行副本——两份迟早会漂。
@@ -102,19 +102,21 @@ tail -3 hud.log            # 出现 inject … entries=k/n（新会话问一句�
 ## 三、面板文件
 
 ```yaml
-session_id: any                                # any / * / 具体会话 id
-expires_at: 2026-12-31T07:00:00+08:00          # 到点自动失效
+session_id: any                                # 默认：全部会话（含以后新建）
+expires_at: never                              # 默认：永久有效；也可写具体时间
 title: 全员自主推进
 enabled: true                                  # off 即暂停，不用删配置
 
 （空行之后是正文，原样注入）
 ```
 
+**默认就是「全部会话 + 永久有效」**：`session_id: any`、`expires_at: never`。只有需要临时提醒时才写具体到期时间（如 `2026-12-31T07:00:00+08:00`），或用 `hudctl.py set --ttl 8h` 限时。`never` 也接受 `forever` / `永久`，大小写不敏感；`status` 会显示「永久有效」，注入头行显示「长期有效」。
+
 正文建议控制在 **1200 字以内**（注入块硬上限 1600 字：标题行 + 正文 + 注入尾行；超出时只截正文，尾行的执行机制建议与自检警告始终保留）。按 ¥2/百万 token 粗算，1200 字约 720–840 token ≈ **¥0.0014–0.0017/轮**；另外每轮多一次 Python 启动，本机 5 次实测 0.15–0.6 s，中位约 0.2 s（慢盘/杀软下更久）。
 
 ### 3.1 作用范围：默认全部（含以后新建的会话）
 
-**默认开关就是 `session_id: any`**：所有档、所有会话、以及以后新建的会话都生效。要收窄，有两条路：
+**默认开关就是 `session_id: any` + `expires_at: never`**：所有档、所有会话、以及以后新建的会话都生效，且不过期。要收窄，有两条路：
 
 1. **整块面板**挂到某个会话：`session_id: <会话id>`（`hudctl.py use`）。此时**只**这一条会话生效。
 2. **按条目**限定（推荐，可混用）：在条目开头写作用域标注，注入时会自动删掉标注本身：
@@ -177,11 +179,11 @@ python hudctl.py impact --profile default,ceo --kinds chat,cron  # 只看指定�
 注入尾行会按当前档名给出一句执行机制建议：`default` 档指向 Hermes 官方机制（delegate_task / cron / kanban），其它档指向本档自己的编排机制（`delegate_task` / `cron` / 本档工具）。
 
 ```bash
-python hudctl.py status                     # 范围、到期、剩多久、正文字数
-python hudctl.py set --ttl 12h --body b.md  # 换正文并续期（不给 --body 就从 stdin 读；空正文/超 1600 字/非 UTF-8 一律拒绝，exit 2；整块估长超限只警告不拒写）
+python hudctl.py status                     # 范围、到期（永久显示「永久有效」）、剩多久、正文字数
+python hudctl.py set --ttl 12h --body b.md  # 换正文；不给 --ttl 沿用当前到期（永久保持永久），--ttl 12h 限时，--ttl never 转永久（空正文/超 1600 字/非 UTF-8 一律拒绝，exit 2；整块估长超限只警告不拒写）
 # 正文一律按 UTF-8 + LF 落盘：--body 文件 / 管道输入里的 CRLF、裸 CR、旧版叠出的双 CR 行尾
 # 都会先归一（面板里不留 CR 字符）；旧版已经写坏的面板，注入端读的时候也会把一串 CR 折成一个换行
-python hudctl.py off / on                   # 暂停 / 恢复；on --ttl 8h 顺手续期（过期且没给 --ttl 会明确拒绝并提示）
+python hudctl.py off / on                   # 暂停 / 恢复；on --ttl 8h 顺手续期，on --ttl never 恢复为永久（过期且没给 --ttl 会明确拒绝并提示）
 python hudctl.py snapshot                   # 存当天快照到 snapshots/（持面板锁复制，不会拍到半份）
 python hudctl.py restore latest --ttl 8h    # 从快照恢复；恢复前自动拍 pre-restore-<时间>.md，拍不成拒绝恢复
 python hudctl.py restore --file pre-restore-2026-10-22-120000.md --ttl 8h   # 按文件名恢复（含恢复前现场照；位置参数写文件名也可以）
@@ -269,7 +271,7 @@ python selfcheck.py && hermes hooks doctor
 
 ## 七、测试
 
-238 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
+240 个单元测试，纯标准库，不碰真实的 `panel.md` / `hud.log`（每个用例复制脚本到临时目录）：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -282,7 +284,7 @@ python -m unittest discover -s tests -v
 - **它是提醒，不是约束**：模型看到不等于一定照做；长上下文、指令冲突时会漂。要「不能装作没看见」得上 `pre_tool_call` 硬拦——但那条要求规则可判定，概念型提示（「自行分析、自行抉择」）翻译不成「命中什么就拦」，硬写只会变成实现者自己编的标准。
 - **每轮一次**：不是每次工具调用；工具层面的拦截是另一个事件。
 - **一个面板文件同一时间只服务一个范围**：`any` 或某一个具体会话。
-- **不自动续期、不自动恢复**：到点就停，恢复快照要人手动执行。
+- **永久面板不会过期**：`expires_at: never` 的面板一直生效；临时面板到点就停，**不自动续期、不自动恢复**，快照恢复要人手动执行。
 - **不碰 Hermes 源码**：只有 `config.yaml` 里一行官方声明。
 - **安全边界**：`panel.md` 是模型每轮都会读的输入——能改它的人就能注入内容；只放在自己账户拥有的目录，别放共享盘，多用户机器上把仓库目录（含 `hud.log`）收紧到本人（Windows `icacls <dir> /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"`，POSIX `chmod 700 <dir>`）。面板若是符号链接/重解析点会被拒绝读取（管理端读路径同样拒绝），写入走 `mkstemp` 随机临时文件 + 原子替换，锁文件也拒绝软链。日志会记会话 id / profile（不含正文）；设 `HUD_LOG_SESSIONS=0` 可只记 id 的 sha256 前 8 位，分享日志前建议打开。细节见 [SECURITY.md](SECURITY.md)。
 
@@ -303,7 +305,7 @@ python -m unittest discover -s tests -v
 | `docs/HOOK-CONFIG-MIGRATION.md` | 钩子配置迁移记录：裸 `python` → 绝对解释器、仓库外副本 → 仓库路径；含逐档清单、验收与回滚（本机 2026-10-31 首次执行、2026-11-04 换机重建） |
 | `AGENTS.md` | **给 Agent 的交接文档**：当前部署形态、运行期文件、已知坑、验收约定、按日期追加的操作日志（接手先读它） |
 | `docs/REINSTALL-v0.22.2.md` | 重装系统后从官方仓库钉装 **v0.22.2** 的完整流程：安装器 `-Commit` 用法、验收到关更新提示、常见失败 |
-| `tests/` | 单元测试（标准库 unittest，共 238）：`test_hud.py` 主流程（57）、`test_selfcheck.py` 机制自检与假红回归（15），`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（41：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
+| `tests/` | 单元测试（标准库 unittest，共 240）：`test_hud.py` 主流程（59）、`test_selfcheck.py` 机制自检与假红回归（15），`test_scope.py` 作用域与 impact（14）、`test_scope_regressions.py` 缺陷回归（16）、`test_hardening.py` 13 项必修回归（41）、`test_reverse_audit.py` 反向审查 10 项回归（32）、`test_fs_safety.py` 安全审计回归（22：软链 tmp/锁/快照、标题转义、日志脱敏、公开仓脱敏、并发建锁误判）、`test_round2_residuals.py` 第二轮复审残留回归（41：双 CR 头部 check/restore、selfcheck 事件域、日志行清洗、scope 续行缩进、截断保留尾行、物理 LF 规范化） |
 | `SECURITY.md` | 信任边界、日志内容、权限建议 |
 | `.github/workflows/tests.yml` | CI：Ubuntu/Windows × Python 3.10/3.12 |
 

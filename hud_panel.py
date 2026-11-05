@@ -53,6 +53,14 @@ ENABLED_TRUE = frozenset({"true", "1", "yes", "on"})
 ENABLED_FALSE = frozenset({"false", "0", "no", "off"})
 ENABLED_VALUES = ENABLED_TRUE | ENABLED_FALSE
 
+# `expires_at: never` = 永久有效（也接受中文「永久」/ forever，大小写不敏感）。
+# 只在元数据里用；注入端与 hudctl 共用这一个判定，避免一边认一边不认。
+NEVER_VALUES = frozenset({"never", "forever", "永久"})
+
+def is_never_expiry(value) -> bool:
+    """expires_at 是否表示「永久有效」。"""
+    return str("" if value is None else value).strip().lower() in NEVER_VALUES
+
 
 MECH_FILES = (
     "agent/turn_context.py",

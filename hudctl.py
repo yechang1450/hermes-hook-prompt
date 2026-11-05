@@ -634,6 +634,13 @@ def _enabled_value(meta: dict):
     return None
 
 
+def _is_never(value) -> bool:
+    """expires_at 是否表示永久有效（与注入端共用同一张表）。"""
+    if hud_panel is not None:
+        return hud_panel.is_never_expiry(value)
+    return str("" if value is None else value).strip().lower() in {"never", "forever", "永久"}
+
+
 def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
     """(启用, 已过期, 范围, 到期时间是否非法)。到期非法按“全部不生效”算，与注入一致。
 
@@ -643,8 +650,9 @@ def _panel_state(meta: dict) -> tuple[bool, bool, str, bool]:
     enabled_value = _enabled_value(meta)
     enabled = bool(enabled_value)
 
-    expires = parse_expiry(meta.get("expires_at", ""))
-    invalid_expiry = expires is None
+    never = _is_never(meta.get("expires_at", ""))
+    expires = None if never else parse_expiry(meta.get("expires_at", ""))
+    invalid_expiry = expires is None and not never
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     expired = invalid_expiry or bool(expires and expires <= datetime.now(CST))
@@ -974,7 +982,8 @@ def cmd_use(args) -> int:
     with panel_lock():
         meta, body = read_panel()
         meta["session_id"] = sid
-        meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
+        meta["expires_at"] = ("never" if _is_never(args.ttl)
+                              else (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds"))
         meta["enabled"] = "true"
         write_panel(meta, body)
     print(f"已挂到：{_safe_text(sid)}（{_safe_text(title)}） 到期 {meta['expires_at']}")
@@ -989,7 +998,9 @@ def cmd_status(_args) -> int:
         body = ""
     else:
         meta, body = read_panel()
-    expires = parse_expiry(meta.get("expires_at", ""))
+    expires_raw = meta.get("expires_at", "")
+    never = _is_never(expires_raw)
+    expires = None if never else parse_expiry(expires_raw)
     if expires and expires.tzinfo is None:
         expires = expires.replace(tzinfo=CST)
     now = datetime.now(CST)
@@ -1000,8 +1011,11 @@ def cmd_status(_args) -> int:
     print(f"标题：{meta.get('title', '-')}")
     print(f"范围：{meta.get('session_id', 'any')}")
     print(f"状态：{state}")
-    print(f"到期：{expires.isoformat(timespec='minutes') if expires else '解析失败'}"
-          + (f"（剩 {left.days}天{left.seconds//3600}小时{(left.seconds%3600)//60}分）" if left and left.total_seconds() > 0 else "（已过期）" if left else ""))
+    if never:
+        print("到期：永久有效")
+    else:
+        print(f"到期：{expires.isoformat(timespec='minutes') if expires else '解析失败'}"
+              + (f"（剩 {left.days}天{left.seconds//3600}小时{(left.seconds%3600)//60}分）" if left and left.total_seconds() > 0 else "（已过期）" if left else ""))
     if oversized:
         print(f"⚠ 面板过大（{size} 字节 > {MAX_PANEL_BYTES}）：正文不读取；"
               f"可用 set --body <文件> 整份覆盖（set 只读头部）")
@@ -1067,14 +1081,23 @@ def cmd_set(args) -> int:
             _die("正文为空：注入端会整块跳过，拒绝写入")
         if len(body) > MAX_BODY_CHARS:
             _die(f"正文 {len(body)} 字，超过上限 {MAX_BODY_CHARS} 字（注入端会截断）")
-        expires = datetime.now(CST) + parse_ttl(args.ttl)
+        now = datetime.now(CST)
+        if args.ttl is None:
+            # 不给 --ttl 就沿用当前到期时间（never 保持永久）；只有缺 expires_at 才补 12h。
+            # 这样改正文不会把永久面板悄悄缩成 12 小时。
+            if not (meta.get("expires_at") or "").strip():
+                meta["expires_at"] = (now + parse_ttl("12h")).isoformat(timespec="seconds")
+        elif _is_never(args.ttl):
+            meta["expires_at"] = "never"
+        else:
+            meta["expires_at"] = (now + parse_ttl(args.ttl)).isoformat(timespec="seconds")
+        expires = None if _is_never(meta.get("expires_at")) else parse_expiry(meta["expires_at"])
         estimate = estimate_block(meta, body, expires)
         if estimate > MAX_BLOCK_CHARS:
             # 只警告不拒写：正文没超 1600 就是合法面板，注入端截断时也会保住绝大部分。
             # 旧实现拿整块估长拒写，正文 1403 字 + 28 字 session id 都存不进去。
             warning = (f"⚠ 注入块约 {estimate} 字（含标题行/尾行/余量），超过 {MAX_BLOCK_CHARS}："
                        f"注入时会被截断，建议再减 {estimate - MAX_BLOCK_CHARS} 字")
-        meta["expires_at"] = expires.isoformat(timespec="seconds")
         meta["enabled"] = "true"
         write_panel(meta, body)
     print(f"已更新：范围={meta['session_id']} 到期={meta['expires_at']} 正文={len(body)} 字")
@@ -1100,12 +1123,14 @@ def estimate_block(meta: dict[str, str], body: str, expires) -> int:
     害得正文没超限也保存不了。尾行是 hud_inject 每次都会追加的「执行机制建议」。
     """
     title = meta.get("title") or "会话面板"
-    stamp = expires.astimezone(CST).strftime("%m-%d %H:%M") if expires else "12-31 07:00"
     profile = (os.environ.get("HERMES_PROFILE") or os.environ.get("HERMES_SESSION_PROFILE")
                or os.environ.get("HUD_PROFILE") or "default").strip() or "default"
-    who = profile                      # 只取档名：session_id 不进头行
     hint = HINT_DEFAULT if profile == "default" else HINT_OTHER.format(who=profile)
-    header = f"[HUD·{title}] 生效至 {stamp}（{who}）"
+    if _is_never(meta.get("expires_at", "")):
+        header = f"[HUD·{title}] 长期有效（{profile}）"
+        return len(header) + len(body) + len(f"执行机制建议：{hint}") + 2 + BLOCK_MARGIN
+    stamp = expires.astimezone(CST).strftime("%m-%d %H:%M") if expires else "12-31 07:00"
+    header = f"[HUD·{title}] 生效至 {stamp}（{profile}）"
     tail = f"执行机制建议：{hint}"
     return len(header) + len(body) + len(tail) + 2 + BLOCK_MARGIN
 
@@ -1155,10 +1180,13 @@ def _inspect_panel(raw: str) -> dict:
                       "（只认 true/false/1/0/yes/no/on/off；非法值注入端会整块跳过）")
     elif not enabled:
         notices.append("面板已暂停（enabled=false）：注入会被跳过（hudctl on 恢复）")
-    expires = parse_expiry(meta.get("expires_at", ""))
-    if expires is None:
-        errors.append(f"expires_at 无法解析：{meta.get('expires_at')!r}")
-    else:
+    expires_raw = meta.get("expires_at", "")
+    never = _is_never(expires_raw)
+    expires = None if never else parse_expiry(expires_raw)
+    if not never and expires is None:
+        errors.append(f"expires_at 无法解析：{meta.get('expires_at')!r}"
+                      "（写 never 表示永久有效）")
+    elif expires is not None:
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=CST)
         if expires <= datetime.now(CST):
@@ -1235,7 +1263,9 @@ def cmd_check(args) -> int:
 
 
 def _is_expired(meta: dict) -> bool:
-    """到期时间不可解析也算「过期」（注入端会跳过）。"""
+    """到期时间不可解析也算「过期」（注入端会跳过）；never = 永不过期。"""
+    if _is_never(meta.get("expires_at", "")):
+        return False
     expires = parse_expiry(meta.get("expires_at", ""))
     if expires is None:
         return True
@@ -1251,7 +1281,8 @@ def cmd_toggle(flag: str):
             if flag == "true":
                 ttl = getattr(args, "ttl", None)
                 if ttl:
-                    meta["expires_at"] = (datetime.now(CST) + parse_ttl(ttl)).isoformat(timespec="seconds")
+                    meta["expires_at"] = ("never" if _is_never(ttl)
+                                          else (datetime.now(CST) + parse_ttl(ttl)).isoformat(timespec="seconds"))
                 elif _is_expired(meta):
                     _die(f"面板已过期（{meta.get('expires_at', '?')}）：直接 on 只是打开一个永不生效的面板。"
                          "顺手续期用 hudctl on --ttl 8h（或 set 换正文+续期）")
@@ -1454,7 +1485,8 @@ def cmd_restore(args) -> int:
         _die(f"快照 {target.name} 头部有未知键（{', '.join(unknown)}），拒绝恢复")
     if args.session:
         meta["session_id"] = args.session
-    meta["expires_at"] = (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds")
+    meta["expires_at"] = ("never" if _is_never(args.ttl)
+                          else (datetime.now(CST) + parse_ttl(args.ttl)).isoformat(timespec="seconds"))
     meta["enabled"] = "true"
     candidate = render_panel(meta, body)
     final_report = _inspect_panel(candidate)   # 改写元数据之后再验一遍（要写进去的就是它）
@@ -1547,10 +1579,11 @@ def main() -> int:
     p_scope.set_defaults(func=cmd_scope)
     p_use = sub.add_parser("use")
     p_use.add_argument("target", help="会话 id 或标题里的关键字")
-    p_use.add_argument("--ttl", default="12h")
+    p_use.add_argument("--ttl", default="12h", help="到期时间（例：8h）；never=永久")
     p_use.set_defaults(func=cmd_use)
     p_set = sub.add_parser("set")
-    p_set.add_argument("--ttl", default="12h")
+    p_set.add_argument("--ttl", default=None,
+                       help="续期（例：8h）；不给则沿用当前到期；never=永久")
     p_set.add_argument("--session", help="any / 会话 id；不给则沿用当前面板")
     p_set.add_argument("--title")
     p_set.add_argument("--body", help="正文文件路径；不给则读 stdin")
@@ -1562,14 +1595,14 @@ def main() -> int:
     p_check.set_defaults(func=cmd_check)
     sub.add_parser("off").set_defaults(func=cmd_toggle("false"))
     p_on = sub.add_parser("on")
-    p_on.add_argument("--ttl", default=None, help="顺手续期（例：8h）；不给则沿用原到期时间")
+    p_on.add_argument("--ttl", default=None, help="顺手续期（例：8h）；不给则沿用原到期时间；never=永久")
     p_on.set_defaults(func=cmd_toggle("true"))
     sub.add_parser("snapshot").set_defaults(func=cmd_snapshot)
     p_restore = sub.add_parser("restore")
     p_restore.add_argument("date", nargs="?", default=None,
                            help="YYYY-MM-DD 或 latest（用 --file 时可省略；也可直接给快照文件名）")
     p_restore.add_argument("--file", help="按文件名恢复（含 pre-restore-*.md）；与日期二选一")
-    p_restore.add_argument("--ttl", default="12h")
+    p_restore.add_argument("--ttl", default="12h", help="到期时间（例：8h）；never=永久")
     p_restore.add_argument("--session")
     p_restore.set_defaults(func=cmd_restore)
     p_prune = sub.add_parser("prune")

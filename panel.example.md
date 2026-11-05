@@ -1,5 +1,5 @@
 session_id: any
-expires_at: 2026-12-25T00:00:00+08:00
+expires_at: never
 title: 全员自主推进
 enabled: true
 

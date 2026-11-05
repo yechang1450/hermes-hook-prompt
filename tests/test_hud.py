@@ -117,6 +117,13 @@ class HudCase(unittest.TestCase):
         self.write_panel(expires="2099-01-01T00:00:00Z")
         self.assertIn("测试面板", self.context(self.inject()[1]))
 
+    def test_never_expiry_is_permanent(self):
+        self.write_panel(expires="never", body="永久正文")
+        ctx = self.context(self.inject()[1])
+        self.assertIn("长期有效", ctx)
+        self.assertNotIn("生效至", ctx)
+        self.assertIn("永久正文", ctx)
+
     def test_bom_is_tolerated(self):
         self.write_panel(body="带 BOM", prefix="\ufeff")
         self.assertIn("带 BOM", self.context(self.inject()[1]))
@@ -159,6 +166,20 @@ class HudCase(unittest.TestCase):
         out = self.run_ctl("status").stdout
         self.assertIn("新正文", self.panel.read_text(encoding="utf-8"))
         self.assertIn("范围：any", out)
+
+    def test_ctl_never_expiry_roundtrip(self):
+        self.write_panel(expires="never", body="旧正文")
+        self.assertIn("永久有效", self.run_ctl("status").stdout)
+        self.assertEqual(self.run_ctl("check").returncode, 0)
+        body = self.dir / "body2.md"
+        body.write_text("新正文", encoding="utf-8")
+        # set 不给 --ttl：永久保持永久，不会被悄悄缩成 12 小时
+        self.assertEqual(self.run_ctl("set", "--body", str(body)).returncode, 0)
+        self.assertIn("expires_at: never", self.panel.read_text(encoding="utf-8"))
+        # 已过期面板 + on --ttl never：直接恢复成永久
+        self.write_panel(expires="2020-01-01T00:00:00+08:00")
+        self.assertEqual(self.run_ctl("on", "--ttl", "never").returncode, 0)
+        self.assertIn("expires_at: never", self.panel.read_text(encoding="utf-8"))
 
     def test_ctl_restore_rejects_path_traversal(self):
         self.write_panel()

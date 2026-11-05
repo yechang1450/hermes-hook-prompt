@@ -8,7 +8,7 @@
 
 面板结构（同目录 panel.md）：
     session_id: any            # any = 所有会话（含以后新建的）；或填具体会话 id
-    expires_at: 2026-12-31T07:00:00+08:00
+    expires_at: never          # never = 永久有效；也可写具体时间（如 2026-12-31T07:00:00+08:00）
     title: 显示名
     enabled: true
 
@@ -274,18 +274,21 @@ def main() -> int:
         return 0
     try:
         raw = (meta.get("expires_at") or "").strip()
-        if raw.endswith("Z"):
-            raw = raw[:-1] + "+00:00"
-        expires = datetime.fromisoformat(raw)
+        if hud_panel.is_never_expiry(raw):
+            expires = None          # 永久有效：不做到期判断
+        else:
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            expires = datetime.fromisoformat(raw)
     except Exception:
         log(f"skip bad-expiry meta={meta.get('expires_at')!r} session={_log_sid(session_id)} profile={profile}")
         return 0
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=CST)
-    now = datetime.now(CST)
-    if now >= expires:
-        log(f"skip expired at {expires.isoformat()} session={_log_sid(session_id)} profile={profile}")
-        return 0
+    if expires is not None:
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=CST)
+        if datetime.now(CST) >= expires:
+            log(f"skip expired at {expires.isoformat()} session={_log_sid(session_id)} profile={profile}")
+            return 0
     if not body:
         log(f"skip empty-body session={_log_sid(session_id)} profile={profile}")
         return 0
@@ -305,12 +308,15 @@ def main() -> int:
             f"entries={total} invalid_scope={bad_scopes}")
         return 0
     title = meta.get("title", "会话面板")
-    stamp = expires.astimezone(CST).strftime("%m-%d %H:%M")
     who = profile or "default"
     hint = ("default bot：优先用 Hermes 官方机制（delegate_task / cron / kanban）"
             if who == "default" else
             f"{who} bot：优先用本档自己的编排机制（delegate_task / cron / 本档工具）")
-    prefix = f"[HUD·{title}] 生效至 {stamp}（{who}）\n"
+    if expires is None:
+        head = "长期有效"
+    else:
+        head = f"生效至 {expires.astimezone(CST).strftime('%m-%d %H:%M')}"
+    prefix = f"[HUD·{title}] {head}（{who}）\n"
     suffix = f"\n\n执行机制建议：{hint}"
     note = _selfcheck_note()
     if note:
