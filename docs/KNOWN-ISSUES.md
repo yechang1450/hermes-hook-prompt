@@ -97,4 +97,4 @@ CI 配置见 `.github/workflows/tests.yml`（ubuntu/windows × Python 3.10/3.12�
 ## 历史残留（不阻塞）
 
 - 早期提交的测试文件里出现过真实会话 id，**工作树已清零，git 历史里仍在**。重写历史要 force push，属需单独授权的动作，本轮未做。克隆历史的人仍能看到该串；它只是会话标识（不含对话内容），且该会话已归档。
-- 2026-11-05 的提交 `0492299` 在 `AGENTS.md` 写入过一条真实会话 id，已在 `bdbf8c8` 从工作树移除；**git 历史里仍在**，同样未做 force push。后续提交前先跑 `python -m unittest tests.test_fs_safety.PublicRepoCase` 自查。
+- 2026-11-05 曾有一条真实会话 id 进入历史（原提交 `0492299` 的 `AGENTS.md`）；已按用户明确授权用 `git rebase --onto` 重写历史并 `force push` 清除，当前所有分支与历史均无真实会话 id。重写前的 `git bundle` 备份只在本地 `temp/`，未推送。
