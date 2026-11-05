@@ -7,7 +7,7 @@
 ## 硬约束
 1. [scope: all] 凡可拆分、可并行的耗时任务，在适用前提下优先用 Hermes 官方子代理机制（delegate_task）派发，让本 session 自动继续；单次即时命令与需我当场看屏/交互的操作直接做。
 2. [scope: all] 需要网页搜索/抓取时，优先用 DeepSeek 官方 Search / Fetch API（/v1/tools/search、/v1/tools/fetch），按其官方文档调用；不占用、不影响大模型对话 API。
-3. [scope: all] 无特殊情况（撞红线、真被阻塞、必须由我拍板）时，自行调研→自行研究→自行分析→自行决策→自行推进，不把方向或下一步抛回给我；用 delegate_task 保持不中断的自动继续，做完再报。
+3. [scope: all] 自主推进：不撞红线、不被真阻塞、不需要你拍板时，发挥主观能动性，自行调研→研究→分析→决策→推进，非必要不把方向或下一步抛回，不是必须要我看或者操作的，尽量后台执行或者headless；积极用 delegate_task 保持自动继续，做完再报。
 4. [scope: all] 当前 Hermes 版本为 v0.22.2 稳定版；优先使用 Hermes 内置技术栈（python 3.14.7 / git 2.53.0+3 / node 26.7.0 / npm 12.0.2 / uv 0.13.5，位于 %LOCALAPPDATA%\hermes\tools\），不另装同类外部件。
 
 ## 红线（动手前需明确授权）

@@ -150,6 +150,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
     3. `security.protected_instruction_files` 被重装重置回 `true`，已 `hermes config set … false`（回读 `false`）——免审约定恢复生效。
   - 已知并发：本次改动期间另一条会话（标题 `Review hermes-hook-prompt pr`）在同一仓上并行改文档，最终以合并后的内容提交；后续接手先 `git status` 确认无第二个写者。
   - **收尾**：`%LOCALAPPDATA%\hermes\tools\.install.lock` 是安装器遗留的 0 字节锁，无进程持有（`CreateFile(..., share=0)` 可打开），但会让 `hermes hooks doctor` 卡在「waiting for .install.lock」；删除后 doctor 恢复四项绿，之后未再生成。
+  - **面板第 3 条改版**（按用户口径）：改为「自主推进：不撞红线、不被真阻塞、不需要你拍板时，发挥主观能动性…非必要不把方向或下一步抛回，不是必须要我看或者操作的，尽量后台执行或者 headless；积极用 delegate_task…」。工具 `hudctl.py set --body <temp> --ttl 1178.499h`；验收 `check` 绿（924 字 / 整块约 1048 字）、`preview` 10→10 条且生效会话 37→37 不变。
 
 ---
 
