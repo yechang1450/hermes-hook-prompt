@@ -56,7 +56,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
-- 面板：987 字正文 / 整块约 1100 字（上限 1600），`session_id: any`，到期 `never`（永久）
+- 面板：986 字正文 / 整块约 1099 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
@@ -166,6 +166,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 归置：本地 `user.name/email`、`core.longpaths=true`、`fetch.prune=true` 已设置；`.gitignore` 补 `.env` / `.env.local` / `.env.*.local` / `*.pem` / `*.key` / `*.log`；tracked 绝对路径扫描无命中。
   - 同步：提交 `.gitignore` + 本日志，普通 `git push`，本地=远端；**第 6 步（孤立根 + force push）未执行——没有用户的「执行 A」**。
   - **面板新增硬约束第 5 条**（用户 2026-11-06 口径）：「本对话负责的项目文件夹有什么改动，线下的仓库要更新，完事后同步 push 到线上对应的仓库。」`hudctl set --ttl never`，正文 987 字 / 整块约 1100 字，`check` 绿；`docs/panel-full-text.md` 同步，本次改动按该条普通提交并 push。
+  - **红线第 2 条按用户口径放宽**（2026-11-06）：「不删改记忆/会话库/备份」→「**不删**记忆/会话库/备份」——允许修改，仍禁止删除；其余「不改 SOUL、凭据、config」和「点名的改动先留回滚点」不变。`hudctl set --ttl never`，正文 986 字 / 整块约 1099 字，`check` 绿；`docs/panel-full-text.md` 同步，提交并 push。
 
 ---
 
