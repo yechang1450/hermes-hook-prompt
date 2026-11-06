@@ -24,3 +24,11 @@ Thumbs.db
 *.swp
 *.swo
 .mypy_cache/
+
+# ===== 密钥 / 日志兜底（2026-11-06 瘦身归置）=====
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.log

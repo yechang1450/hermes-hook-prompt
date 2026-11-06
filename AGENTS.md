@@ -156,6 +156,16 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - **历史重写（用户 2026-11-05 明确授权，含 force push）**：用 `git rebase --onto` 去掉 `AGENTS.md` 历史里的真实会话 id（原 `0492299`），`git push --force` 覆盖远端 `master`。哈希映射：`0492299→e02bd96`、`bdbf8c8→8020bdb`，后续提交同步变化；重写后工作树与原 `3591ad3` 完全一致。重写前 `git bundle` 备份在 `temp/hermes-hook-prompt-pre-rewrite-20261105.bundle`（未推送）。
   - **仓库公开（用户 2026-11-05 指令）**：用本机用户环境变量里的 GitHub token（值未写入仓库）调用 API 将 `private` 改为 `false`；复核 `visibility: public`、匿名 `GET` 200。公开后重新克隆校验：历史无真实会话 id，仓库无 `panel.md` / `hud.log` / `state/` 等运行期文件；`tests` 工作流在 Ubuntu/Windows × Python 3.10/3.12 上运行。
 
+### 2026-11-06
+
+- **仓库瘦身与归置（用户 v3 流程，第 0–5 步；第 6 步未执行）**
+  - 前置：工作树干净、HEAD `64e4412`、仅 `master`、无 tag、远端 `ssh://git@ssh.github.com:443/yechang1450/hermes-hook-prompt.git`。
+  - 体检：总 771 KB、`.git` 207 KB；无 >5 MB 文件、无构建产物（无 `.venv` / `node_modules` / `target`）；密钥扫描无命中；忽略项仅 `panel.md` / `hud.log` / `state/` / `__pycache__`。
+  - 瘦身：删 `__pycache__` / `*.pyc`；`hud.log`（39 KB）与 `state/selfcheck-inject.log`（3.2 KB）归档到 `temp/hermes-hook-prompt-logs-20261106/`；`git gc --prune=now`。最终 675 KB / `.git` 207 KB。
+  - 验证：`tools\python-3.14.7` 跑 `python -m unittest discover -s tests` **240 例 OK**；`selfcheck` **7/7**。
+  - 归置：本地 `user.name/email`、`core.longpaths=true`、`fetch.prune=true` 已设置；`.gitignore` 补 `.env` / `.env.local` / `.env.*.local` / `*.pem` / `*.key` / `*.log`；tracked 绝对路径扫描无命中。
+  - 同步：提交 `.gitignore` + 本日志，普通 `git push`，本地=远端；**第 6 步（孤立根 + force push）未执行——没有用户的「执行 A」**。
+
 ---
 
 ## 7. 接手 checklist（复制粘贴用）
