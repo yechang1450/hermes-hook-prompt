@@ -168,6 +168,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - **面板新增硬约束第 5 条**（用户 2026-11-06 口径）：「本对话负责的项目文件夹有什么改动，线下的仓库要更新，完事后同步 push 到线上对应的仓库。」`hudctl set --ttl never`，正文 987 字 / 整块约 1100 字，`check` 绿；`docs/panel-full-text.md` 同步，本次改动按该条普通提交并 push。
   - **红线第 2 条按用户口径放宽**（2026-11-06）：「不删改记忆/会话库/备份」→「**不删**记忆/会话库/备份」——允许修改，仍禁止删除；其余「不改 SOUL、凭据、config」和「点名的改动先留回滚点」不变。`hudctl set --ttl never`，正文 986 字 / 整块约 1099 字，`check` 绿；`docs/panel-full-text.md` 同步，提交并 push。
   - **硬约束重新分条**（用户 2026-11-06）：由 5 条拆为 8 条——并行派发 / 即时直做 / 搜索 API / 自主推进 / 后台执行 / 内置栈 / 不装外部件 / 仓库同步；语义不变，只是拆开更清晰。`hudctl set --ttl never`，正文 1000 字 / 整块约 1113 字，`check` 绿；`docs/panel-full-text.md` 同步，提交并 push。
+  - **「巡查老师」可行性研究**（用户 2026-11-06）：新增 `docs/PATROL-DESIGN.md`，按 v0.22.2 源码梳理 `pre_llm_call` / `pre_tool_call` / `post_tool_call` / `pre_verify` / `transform_tool_result` 的触发点与返回契约，给出「硬拦截 + 收尾补作业 + 跨轮教练」三层混合架构、硬约束/红线可行性矩阵、分阶段落地与误报/绕过风险。**未改 config、未装新 hook、未动 panel**；提交并 push。
 
 ---
 
