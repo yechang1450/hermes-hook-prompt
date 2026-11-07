@@ -57,7 +57,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
 - 面板：1000 字正文 / 整块约 1113 字（上限 1600），`session_id: any`，到期 `never`（永久）
-- 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
+- 自检 7/7、`hooks doctor` 四项绿、单元测试 **266** 例全绿
 
 ---
 
@@ -98,7 +98,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 一个仓、只有 `master`；改完就推，**推完必须 `git ls-remote origin refs/heads/master` 核对远端 HEAD**。
 - **本文件（`AGENTS.md`）免审**：项目说明与操作日志的追加 / 更正**不需要另行审批**（用户 2026-11-04 明确授权）；Hermes 配置 `security.protected_instruction_files` 已置 `false`。约束只有两条：①日志只追加，不改历史条目；②事实更正直接改正文，但要在当天日志里留一条更正记录。
 - 推之前过三项自检：凭据、隐私（真实会话 id / 人名）、本机绝对路径。
-- 测试：`python -m unittest discover -s tests`（240 例，约 60 s，纯标准库，不碰真实面板/日志）。
+- 测试：`python -m unittest discover -s tests`（266 例，约 70 s，纯标准库，不碰真实面板/日志）。
 - 改了 `hud_inject.py` 要重跑 `selfcheck.py`；改了面板要用 `hudctl.py`（禁止手写 panel.md 绕过校验）。
 - 一次性文件放 `<workspace>\temp\`，不要留在仓库里。
 - 本 session 只负责这一个项目；别的仓/别的对话不碰。Hermes 重启/停止、改 config、改记忆都属红线，需用户明确授权。
@@ -173,6 +173,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 ### 2026-11-07
 
 - **调研文档归置**：按工作区约定，把 `docs/PATROL-DESIGN.md` 移出仓库到 `workspace/temp/hermes-hook-prompt-patrol/PATROL-DESIGN.md`；仓库当前树不再含调研文档（历史提交仍含；要彻底抹除需重写已推历史，未获「执行 A」授权，不做）。本次删除提交并 push。
+- **巡查 Phase 0（dry-run，未上线）**：新增 `patrol_guard.py`、`patrol_rules.json`（10 条高置信红线/硬约束）、`tests/test_patrol_guard.py`（26 例）；`pre_verify` 规则 8 检查 `changed_paths` 所属仓库 dirty/ahead。**未改 config、未注册 hook、未动 panel**。`tools\python-3.14.7` 全量 **266 例 OK**；实测 force push 返回 approve、正常 `git push` 返回 `{}`、当前 dirty 仓库返回 `continue`。分支 `feat/patrol-phase0`，回滚基线 `0e750cb`；测试通过后合并 master 并 push。
 
 ---
 
@@ -185,5 +186,5 @@ git log --oneline -3
 python selfcheck.py             # 7/7
 hermes hooks doctor             # 四项绿
 python hudctl.py status         # 面板状态/到期/字数
-python -m unittest discover -s tests   # 240 绿
+python -m unittest discover -s tests   # 266 绿
 ```

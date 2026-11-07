@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "RL-R3-FORCE-PUSH",
+      "layer": "redline",
+      "action": "approve",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\bgit\\b[^\\n\\r]*\\bpush\\b[^\\n\\r]*(?:--force(?:-with-lease)?|(?<!\\S)-f(?=\\s|$)|\\+\\S+)"
+      ],
+      "message": "红线 3：不改写已推历史（含 force push）。"
+    },
+    {
+      "id": "RL-R3-REWRITE-HISTORY",
+      "layer": "redline",
+      "action": "approve",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\bgit\\s+(?:filter-branch|filter-repo)\\b"
+      ],
+      "message": "红线 3：不改写已推历史；检测到 filter-branch / filter-repo。"
+    },
+    {
+      "id": "RL-R1-RESTART-HERMES",
+      "layer": "redline",
+      "action": "approve",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\bhermes\\s+(?:gateway\\s+)?(?:stop|restart)\\b",
+        "\\btaskkill\\b[^\\n\\r]*(?:hermes|Hermes)",
+        "\\bStop-Process\\b[^\\n\\r]*(?:hermes|Hermes)",
+        "\\bsc(?:\\.exe)?\\s+stop\\s+Hermes\\b",
+        "\\bschtasks\\b[^\\n\\r]*(?:/End|/end)\\b[^\\n\\r]*Hermes",
+        "\\bpkill\\b[^\\n\\r]*hermes"
+      ],
+      "message": "红线 1：不重启/停止 Hermes、网关、桌面后端。"
+    },
+    {
+      "id": "RL-R2-PROTECTED-WRITE",
+      "layer": "redline",
+      "action": "approve",
+      "tools": [
+        "terminal",
+        "execute_code",
+        "write_file",
+        "patch"
+      ],
+      "fields": [
+        "path",
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "(?:^|[\\/])(?:config\\.yaml|SOUL\\.md|auth\\.json|credentials\\.json|\\.env(?:\\.[^\\/]+)?|[^\\/]+\\.pem|[^\\/]+\\.key)$",
+        "\\bhermes\\s+config\\s+set\\b",
+        "(?:>>?|Set-Content|Out-File|Add-Content|tee)\\s+[^\\n\\r]*(?:config\\.yaml|SOUL\\.md|auth\\.json|credentials\\.json|\\.env)\\b",
+        "\\b(?:rm|del|erase|Remove-Item)\\b[^\\n\\r]*(?:config\\.yaml|SOUL\\.md|auth\\.json|credentials\\.json|\\.env)\\b"
+      ],
+      "message": "红线 2：不改 SOUL、凭据、config。"
+    },
+    {
+      "id": "RL-R2-DELETE-DATA",
+      "layer": "redline",
+      "action": "block",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\b(?:rm|del|erase|rmdir|Remove-Item|Remove-ItemProperty)\\b[^\\n\\r]*(?:[\\/\\s])(?:memories?|sessions?|backups?)(?:[\\/\\s]|$)",
+        "\\b(?:rm|del|erase|Remove-Item)\\b[^\\n\\r]*(?:state\\.db|kanban\\.db|\\.bundle)\\b"
+      ],
+      "message": "红线 2：不删记忆/会话库/备份。"
+    },
+    {
+      "id": "RL-R3-PUBLIC-RELEASE",
+      "layer": "redline",
+      "action": "approve",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\bgh\\s+repo\\s+edit\\b[^\\n\\r]*--visibility\\s+public",
+        "\\bgh\\s+release\\s+create\\b",
+        "\\b(?:npm|yarn|pnpm)\\s+publish\\b",
+        "\\bcargo\\s+publish\\b",
+        "\\btwine\\s+upload\\b",
+        "\\bdocker\\s+push\\b",
+        "\\bcurl\\b[^\\n\\r]*(?:api\\.github\\.com|github\\.com)[^\\n\\r]*(?:PATCH|visibility)"
+      ],
+      "message": "红线 3：不对外发布、不公开仓库、不发 Release。"
+    },
+    {
+      "id": "RL-R5-DISK-DEVICE",
+      "layer": "redline",
+      "action": "block",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\bdiskpart\\b",
+        "\\bformat\\s+[A-Za-z]:",
+        "\\bmkfs(?:\\.\\w+)?\\b",
+        "\\bbcdedit\\b",
+        "\\bbootrec\\b",
+        "\\bpnputil\\b[^\\n\\r]*\\/disable-device",
+        "\\b(?:Clear-Disk|Initialize-Disk|Remove-Partition)\\b"
+      ],
+      "message": "红线 5：不做不可逆的磁盘/设备操作。"
+    },
+    {
+      "id": "RL-R6-BROAD-KILL",
+      "layer": "redline",
+      "action": "block",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\btaskkill\\b[^\\n\\r]*\\/IM\\s+(?:python|python3|node)(?:\\.exe)?\\b",
+        "\\bStop-Process\\b[^\\n\\r]*-Name\\s+(?:python|node)\\b",
+        "\\bpkill\\b[^\\n\\r]*python"
+      ],
+      "message": "红线 6：不杀/停别的对话的进程与在跑任务。"
+    },
+    {
+      "id": "RL-R6-PID-KILL",
+      "layer": "redline",
+      "action": "approve",
+      "tools": [
+        "terminal"
+      ],
+      "fields": [
+        "command"
+      ],
+      "patterns": [
+        "\\btaskkill\\b[^\\n\\r]*\\/PID\\b",
+        "\\bStop-Process\\b[^\\n\\r]*-Id\\b",
+        "^\\s*kill\\s+\\d+\\b"
+      ],
+      "message": "红线 6：不杀/停别的对话的进程；确认这个 PID 不是别的会话。"
+    },
+    {
+      "id": "RL-H7-EXTERNAL-INSTALL",
+      "layer": "hard",
+      "action": "approve",
+      "tools": [
+        "terminal",
+        "execute_code"
+      ],
+      "fields": [
+        "command",
+        "code"
+      ],
+      "patterns": [
+        "\\b(?:winget|choco|scoop)\\s+install\\b",
+        "\\bnpm\\s+(?:install|i)\\s+(?:-g|--global)\\b",
+        "\\bpip(?:3)?\\s+install\\b",
+        "\\buv\\s+(?:tool|pip)\\s+install\\b",
+        "\\bcargo\\s+install\\b",
+        "\\bgo\\s+install\\b"
+      ],
+      "message": "硬约束 7：不另装同类外部件；确认这是项目依赖而不是另一套工具链。"
+    }
+  ]
+}
