@@ -180,6 +180,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 修法：新增 `_force_utf8_stdio()`（stdin/stdout → UTF-8/errors=replace，stderr → UTF-8/backslashreplace；`StringIO` 等无 `reconfigure` 的流跳过）与 `_emit_stdout()`（直接写 `sys.stdout.buffer` 的 UTF-8 字节，绕开 TextIOWrapper 的编码猜测）；`main()` 入口调用前者，两处 hook JSON 输出（正常路径 + fail-open）都用后者。Hermes 侧本就以 `text=True, encoding="utf-8"` 收发（`agent/shell_hooks.py:340`），所以这是子进程单边问题。
   - 回归：新增 `test_cli_survives_non_utf8_console`、`test_cli_reads_utf8_payload_on_non_utf8_console`（子进程强制 `PYTHONIOENCODING=cp1252`、`PYTHONUTF8=0`）；全量 **268 例 OK**；`selfcheck` 7/7（指纹 `de94c71cc0f3a5b4` 未变，hud_inject 未动）。
   - 巡检误报核验：扫描器把 `tests/test_patrol_guard.py` 的脱敏夹具当成「严重凭据告警」——实际字符串是带省略号的截断样例（`ghp_ab...` / `ghp_ab...5678`），不是 40 位 PAT，且同文件 `assertNotIn` / `assertIn("[redacted]")` 正是断言它必须被抹掉；无需轮换。
+  - CI 复核：推后 run `42321843705` 四个组合全部 success（含此前失败的 `windows-latest` × 3.10/3.12）；远端 HEAD = `4afc9c0`。
 
 ---
 
