@@ -1,15 +1,18 @@
 # 面板全文（与运行版同文，供回溯）
 
 > 运行版是本机 `panel.md`（不入库）；`panel.example.md` 是精简样例。本文件是同一份措辞的存档，改运行版时同次更新。
-> 最近同步：2026-11-05（本机 `panel.md`，Hermes v0.22.2 内置栈口径）。
+> 最近同步：2026-11-06（本机 `panel.md`，硬约束重新分条，v0.22.2 内置栈口径）。
 
 ```
 ## 硬约束
-1. [scope: all] 凡可拆分、可并行的耗时任务，在适用前提下优先用 Hermes 官方子代理机制（delegate_task）派发，让本 session 自动继续；单次即时命令与需我当场看屏/交互的操作直接做。
-2. [scope: all] 需要网页搜索/抓取时，优先用 DeepSeek 官方 Search / Fetch API（/v1/tools/search、/v1/tools/fetch），按其官方文档调用；不占用、不影响大模型对话 API。
-3. [scope: all] 自主推进：不撞红线、不被真阻塞、不需要你拍板时，发挥主观能动性，自行调研→研究→分析→决策→推进，非必要不把方向或下一步抛回，不是必须要我看或者操作的，尽量后台执行或者headless；积极用 delegate_task 保持自动继续，做完再报。
-4. [scope: all] 当前 Hermes 版本为 v0.22.2 稳定版；优先使用 Hermes 内置技术栈（python 3.14.7 / git 2.53.0+3 / node 26.7.0 / npm 12.0.2 / uv 0.12.3，位于 %LOCALAPPDATA%\hermes\tools\），不另装同类外部件。
-5. [scope: all] 本对话负责的项目文件夹有什么改动，线下的仓库要更新，完事后同步 push 到线上对应的仓库。
+1. [scope: all] 可拆分、可并行的耗时任务，优先用 Hermes 官方子代理机制（delegate_task）派发，让本 session 自动继续。
+2. [scope: all] 单次即时命令、需要我当场看屏或交互的操作，直接执行，不派发。
+3. [scope: all] 网页搜索/抓取优先用 DeepSeek 官方 Search / Fetch API（/v1/tools/search、/v1/tools/fetch），不占用、不影响对话 API。
+4. [scope: all] 无特殊情况（撞红线、真被阻塞、必须由我拍板）时，自行调研→研究→分析→决策→推进；非必要不把方向或下一步抛回。
+5. [scope: all] 不是必须我看或操作的，尽量后台执行或 headless；用 delegate_task 保持自动继续，做完再报。
+6. [scope: all] 当前 Hermes 版本为 v0.22.2 稳定版；优先用内置技术栈（python 3.14.7 / git 2.53.0+3 / node 26.7.0 / npm 12.0.2 / uv 0.12.3，位于 %LOCALAPPDATA%\hermes\tools\）。
+7. [scope: all] 不另装同类外部件。
+8. [scope: all] 本对话负责的项目文件夹有改动，先更新线下仓库（提交），完事后同步 push 到线上对应仓库。
 
 ## 红线（动手前需明确授权）
 - 不重启/停止 Hermes、网关、桌面后端；不升级/降级（你已授权的自动恢复任务除外）。
