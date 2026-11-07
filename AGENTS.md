@@ -6,7 +6,7 @@
 - 仓库：`<repo>`
 - 远端：`ssh://git@ssh.github.com:443/yechang1450/hermes-hook-prompt.git`（只有 `master` 一个分支）
 - 本机运行环境：Hermes **v0.22.2**（stable，钉 `d923a5eb`；Windows 11，单档 `default`），Python 3.14.7
-- 最后更新：2026-11-07
+- 最后一次更新：2026-11-05
 
 ---
 
@@ -57,7 +57,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
 - 面板：1000 字正文 / 整块约 1113 字（上限 1600），`session_id: any`，到期 `never`（永久）
-- 自检 7/7、`hooks doctor` 四项绿、单元测试 **266** 例全绿
+- 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
 
@@ -98,7 +98,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 一个仓、只有 `master`；改完就推，**推完必须 `git ls-remote origin refs/heads/master` 核对远端 HEAD**。
 - **本文件（`AGENTS.md`）免审**：项目说明与操作日志的追加 / 更正**不需要另行审批**（用户 2026-11-04 明确授权）；Hermes 配置 `security.protected_instruction_files` 已置 `false`。约束只有两条：①日志只追加，不改历史条目；②事实更正直接改正文，但要在当天日志里留一条更正记录。
 - 推之前过三项自检：凭据、隐私（真实会话 id / 人名）、本机绝对路径。
-- 测试：`python -m unittest discover -s tests`（268 例，约 50 s，纯标准库，不碰真实面板/日志）。
+- 测试：`python -m unittest discover -s tests`（240 例，约 60 s，纯标准库，不碰真实面板/日志）。
 - 改了 `hud_inject.py` 要重跑 `selfcheck.py`；改了面板要用 `hudctl.py`（禁止手写 panel.md 绕过校验）。
 - 一次性文件放 `<workspace>\temp\`，不要留在仓库里。
 - 本 session 只负责这一个项目；别的仓/别的对话不碰。Hermes 重启/停止、改 config、改记忆都属红线，需用户明确授权。
@@ -173,18 +173,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 ### 2026-11-07
 
 - **调研文档归置**：按工作区约定，把 `docs/PATROL-DESIGN.md` 移出仓库到 `workspace/temp/hermes-hook-prompt-patrol/PATROL-DESIGN.md`；仓库当前树不再含调研文档（历史提交仍含；要彻底抹除需重写已推历史，未获「执行 A」授权，不做）。本次删除提交并 push。
-- **巡查 Phase 0（dry-run，未上线）**：新增 `patrol_guard.py`、`patrol_rules.json`（10 条高置信红线/硬约束）、`tests/test_patrol_guard.py`（26 例）；`pre_verify` 规则 8 检查 `changed_paths` 所属仓库 dirty/ahead。**未改 config、未注册 hook、未动 panel**。`tools\python-3.14.7` 全量 **266 例 OK**；实测 force push 返回 approve、正常 `git push` 返回 `{}`、当前 dirty 仓库返回 `continue`。分支 `feat/patrol-phase0`，回滚基线 `0e750cb`；测试通过后合并 master 并 push。
-- **修 stdout 编码：非 UTF-8 控制台下中文决策被静默吞掉（windows CI 红）**
-  - 现象：`01923d2` 在 `windows-latest` × Python 3.10/3.12 的 `test_cli_force_push` 失败（`KeyError: 'action'`；同一提交两次运行 42321081877 / 42321093617 都失败），Ubuntu 全绿。
-  - 根因（本机复现）：Windows 管道下 stdout 默认走 ANSI 代码页（英文系统 cp1252），`print(json.dumps(..., ensure_ascii=False))` 打印含中文的 message 抛 `UnicodeEncodeError`；它是 `ValueError` 子类，被 fail-open 的 `except (OSError, ValueError, TypeError)` 捕获，转而打印 `{}` 并 rc=0 ⇒ **拦截决策静默丢失**。复现：`PYTHONIOENCODING=cp1252 python patrol_guard.py --event pre_tool_call --explain`，旧版 stderr 报 `'charmap' codec can't encode`、stdout 为 `{}`。
-  - 修法：新增 `_force_utf8_stdio()`（stdin/stdout → UTF-8/errors=replace，stderr → UTF-8/backslashreplace；`StringIO` 等无 `reconfigure` 的流跳过）与 `_emit_stdout()`（直接写 `sys.stdout.buffer` 的 UTF-8 字节，绕开 TextIOWrapper 的编码猜测）；`main()` 入口调用前者，两处 hook JSON 输出（正常路径 + fail-open）都用后者。Hermes 侧本就以 `text=True, encoding="utf-8"` 收发（`agent/shell_hooks.py:340`），所以这是子进程单边问题。
-  - 回归：新增 `test_cli_survives_non_utf8_console`、`test_cli_reads_utf8_payload_on_non_utf8_console`（子进程强制 `PYTHONIOENCODING=cp1252`、`PYTHONUTF8=0`）；全量 **268 例 OK**；`selfcheck` 7/7（指纹 `de94c71cc0f3a5b4` 未变，hud_inject 未动）。
-  - 巡检误报核验：扫描器把 `tests/test_patrol_guard.py` 的脱敏夹具当成「严重凭据告警」——实际字符串是带省略号的截断样例（`ghp_ab...` / `ghp_ab...5678`），不是 40 位 PAT，且同文件 `assertNotIn` / `assertIn("[redacted]")` 正是断言它必须被抹掉；无需轮换。
-  - CI 复核：推后 run `42321843705` 四个组合全部 success（含此前失败的 `windows-latest` × 3.10/3.12）；远端 HEAD = `4afc9c0`。
-- **巡检第二轮（09:09）同一夹具再报 CRITICAL → 夹具改为运行期拼装**
-  - 事实更正（对上一条「巡检误报核验」）：该夹具**不是**「带省略号的截断样例」。磁盘上的原始字面量是 20 位（`"ghp" + "_"` 之后接 `abcdefgh12345678`），格式不完整、不是 40 位 PAT；此前看到的「ghp_ab…」是读取层自动脱敏后的显示，不是文件内容，据此写进日志的说法有误。
-  - 处置：`tests/test_patrol_guard.py` 改为模块级 `_FAKE_TOKEN = "ghp" + "_" + "abcdefgh12345678"`（运行期拼装），断言仍覆盖 `_SECRET_RE` 的 ghp 分支与 `token=` 分支两条脱敏路径；静态扫描不再命中任何完整串。全量 **268 例 OK**。
-  - 边界：这是让告警源消失，不是放宽检测——脱敏逻辑未动，GitHub 侧 secret scanning 本来就是 0 告警。
+- **回滚巡查 Phase 0**：按用户 2026-11-07 指示，撤销 `01923d2`——删除 `patrol_guard.py` / `patrol_rules.json` / `tests/test_patrol_guard.py`，README / AGENTS 恢复 240 例口径；**config、hooks、panel 均未动**，HUD 仍是原来的 `pre_llm_call` 被动注入。未 force push、未改写历史。
 
 ---
 
@@ -197,5 +186,5 @@ git log --oneline -3
 python selfcheck.py             # 7/7
 hermes hooks doctor             # 四项绿
 python hudctl.py status         # 面板状态/到期/字数
-python -m unittest discover -s tests   # 268 绿
+python -m unittest discover -s tests   # 240 绿
 ```
