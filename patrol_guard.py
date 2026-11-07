@@ -278,6 +278,42 @@ def repo_sync_message(
 
 
 # --------------------------------------------------------------------------- #
+# hook 线协议：stdin/stdout 一律 UTF-8
+# --------------------------------------------------------------------------- #
+def _force_utf8_stdio() -> None:
+    """把三路标准流切到 UTF-8。
+
+    Hermes 侧用 ``text=True, encoding="utf-8"`` 收发 hook payload
+    （agent/shell_hooks.py），但子进程自己的 stdout 在 Windows 管道上默认走 ANSI
+    代码页（英文系统 cp1252）。打印含中文的 JSON 会抛 UnicodeEncodeError，再被下面
+    的 fail-open 分支吞掉，stdout 变成 ``{}``，拦截决策静默丢失
+    （2026-11-07 由 windows-latest CI 的 test_cli_force_push 暴露）。
+    """
+    for stream, errors in (
+        (sys.stdin, "replace"),
+        (sys.stdout, "replace"),
+        (sys.stderr, "backslashreplace"),
+    ):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # StringIO（进程内调用 main）没有 reconfigure
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors=errors)
+        except (ValueError, OSError):  # 流已被别的包装层接管时放弃，靠 _emit_stdout 兜底
+            continue
+
+
+def _emit_stdout(text: str) -> None:
+    """写出 hook JSON：直接写 UTF-8 字节，绕开 TextIOWrapper 的编码猜测。"""
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        buffer.write(text.encode("utf-8") + b"\n")
+        buffer.flush()
+        return
+    print(text)
+
+
+# --------------------------------------------------------------------------- #
 # CLI：Phase 0 dry-run
 # --------------------------------------------------------------------------- #
 def _read_payload(path: str | None) -> dict[str, Any]:
@@ -296,6 +332,7 @@ def _roots_from(args: argparse.Namespace) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(description="HUD patrol guard (Phase 0 dry-run)")
     parser.add_argument("--event", help="pre_tool_call / pre_verify；默认读 payload.hook_event_name")
     parser.add_argument("--payload", help="JSON 文件；省略则读 stdin")
@@ -331,13 +368,13 @@ def main(argv: list[str] | None = None) -> int:
             output = {}
             if args.explain:
                 print(f"patrol_guard: event {event!r} not handled in Phase 0", file=sys.stderr)
-        print(json.dumps(output, ensure_ascii=False))
+        _emit_stdout(json.dumps(output, ensure_ascii=False))
         return 0
     except (OSError, ValueError, TypeError) as exc:
         # fail-open：hook 侧不应因为规则文件坏了而阻断工作。
         if args.explain:
             print(f"patrol_guard: {exc}", file=sys.stderr)
-        print("{}")
+        _emit_stdout("{}")
         return 0
 
 

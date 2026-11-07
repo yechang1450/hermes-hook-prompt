@@ -3,6 +3,7 @@
 不注册 hook、不读真实 config；全部用合成 payload 和临时 git 仓库。
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -246,7 +247,7 @@ class PreVerifyCase(unittest.TestCase):
 
 
 class CliCase(unittest.TestCase):
-    def _run(self, payload, *args):
+    def _run(self, payload, *args, env=None):
         proc = subprocess.run(
             [sys.executable, str(REPO / "patrol_guard.py"), *args],
             input=json.dumps(payload, ensure_ascii=False),
@@ -255,6 +256,7 @@ class CliCase(unittest.TestCase):
             encoding="utf-8",
             errors="replace",
             cwd=str(REPO),
+            env={**os.environ, **(env or {})},
             timeout=60,
         )
         return proc
@@ -268,6 +270,35 @@ class CliCase(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertEqual(data["action"], "approve")
         self.assertIn("RL-R3-FORCE-PUSH", proc.stderr)
+
+    def test_cli_survives_non_utf8_console(self):
+        """stdout 走 ANSI 代码页（英文 Windows 的 cp1252）时，中文消息不得吞掉决策。
+
+        回归 2026-11-07 windows-latest CI：UnicodeEncodeError 被 fail-open 吞掉，
+        stdout 变成 {}，force push 的 approve 静默丢失。
+        """
+        env = {"PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+        proc = self._run(
+            {"tool_name": "terminal", "tool_input": {"command": "git push --force"}},
+            "--event", "pre_tool_call", "--explain",
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0)
+        data = json.loads(proc.stdout)
+        self.assertEqual(data["action"], "approve")
+        self.assertIn("红线 3", data["message"])  # 中文按 UTF-8 原样往返
+        self.assertIn("RL-R3-FORCE-PUSH", proc.stderr)
+
+    def test_cli_reads_utf8_payload_on_non_utf8_console(self):
+        """payload 里的中文（git commit 说明等）也要按 UTF-8 读进来，不能变成乱码。"""
+        env = {"PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+        proc = self._run(
+            {"tool_name": "terminal", "tool_input": {"command": "git push --force # 中文备注"}},
+            "--event", "pre_tool_call",
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(json.loads(proc.stdout)["action"], "approve")
 
     def test_cli_clean(self):
         proc = self._run(
