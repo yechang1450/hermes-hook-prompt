@@ -170,6 +170,10 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - **硬约束重新分条**（用户 2026-11-06）：由 5 条拆为 8 条——并行派发 / 即时直做 / 搜索 API / 自主推进 / 后台执行 / 内置栈 / 不装外部件 / 仓库同步；语义不变，只是拆开更清晰。`hudctl set --ttl never`，正文 1000 字 / 整块约 1113 字，`check` 绿；`docs/panel-full-text.md` 同步，提交并 push。
   - **「巡查老师」可行性研究**（用户 2026-11-06）：新增 `docs/PATROL-DESIGN.md`，按 v0.22.2 源码梳理 `pre_llm_call` / `pre_tool_call` / `post_tool_call` / `pre_verify` / `transform_tool_result` 的触发点与返回契约，给出「硬拦截 + 收尾补作业 + 跨轮教练」三层混合架构、硬约束/红线可行性矩阵、分阶段落地与误报/绕过风险。**未改 config、未装新 hook、未动 panel**；提交并 push。
 
+### 2026-11-07
+
+- **调研文档归置**：按工作区约定，把 `docs/PATROL-DESIGN.md` 移出仓库到 `workspace/temp/hermes-hook-prompt-patrol/PATROL-DESIGN.md`；仓库当前树不再含调研文档（历史提交仍含；要彻底抹除需重写已推历史，未获「执行 A」授权，不做）。本次删除提交并 push。
+
 ---
 
 ## 7. 接手 checklist（复制粘贴用）
