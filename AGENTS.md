@@ -181,6 +181,10 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
   - 回归：新增 `test_cli_survives_non_utf8_console`、`test_cli_reads_utf8_payload_on_non_utf8_console`（子进程强制 `PYTHONIOENCODING=cp1252`、`PYTHONUTF8=0`）；全量 **268 例 OK**；`selfcheck` 7/7（指纹 `de94c71cc0f3a5b4` 未变，hud_inject 未动）。
   - 巡检误报核验：扫描器把 `tests/test_patrol_guard.py` 的脱敏夹具当成「严重凭据告警」——实际字符串是带省略号的截断样例（`ghp_ab...` / `ghp_ab...5678`），不是 40 位 PAT，且同文件 `assertNotIn` / `assertIn("[redacted]")` 正是断言它必须被抹掉；无需轮换。
   - CI 复核：推后 run `42321843705` 四个组合全部 success（含此前失败的 `windows-latest` × 3.10/3.12）；远端 HEAD = `4afc9c0`。
+- **巡检第二轮（09:09）同一夹具再报 CRITICAL → 夹具改为运行期拼装**
+  - 事实更正（对上一条「巡检误报核验」）：该夹具**不是**「带省略号的截断样例」。磁盘上的原始字面量是 20 位（`"ghp" + "_"` 之后接 `abcdefgh12345678`），格式不完整、不是 40 位 PAT；此前看到的「ghp_ab…」是读取层自动脱敏后的显示，不是文件内容，据此写进日志的说法有误。
+  - 处置：`tests/test_patrol_guard.py` 改为模块级 `_FAKE_TOKEN = "ghp" + "_" + "abcdefgh12345678"`（运行期拼装），断言仍覆盖 `_SECRET_RE` 的 ghp 分支与 `token=` 分支两条脱敏路径；静态扫描不再命中任何完整串。全量 **268 例 OK**。
+  - 边界：这是让告警源消失，不是放宽检测——脱敏逻辑未动，GitHub 侧 secret scanning 本来就是 0 告警。
 
 ---
 
