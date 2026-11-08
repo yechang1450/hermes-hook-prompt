@@ -56,7 +56,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
-- 面板：1032 字正文 / 整块约 1145 字（上限 1600），`session_id: any`，到期 `never`（永久）
+- 面板：1006 字正文 / 整块约 1119 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
@@ -179,6 +179,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 
 - **硬约束新增第 9 条**（用户 2026-11-08 口径）：「只处理本对话负责的项目；别的 session / 项目的事，不主动查、不主动报、不主动动，除非我明确点名。」`hudctl set --ttl never`，正文 1070 字 / 整块约 1183 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **硬约束调整**（用户 2026-11-08）：第 1 条改为「可拆分、可并行的耗时任务，积极使用 Hermes 的delegate_task机制」；原第 4、5 条合并为一条（自主推进 + 后台/headless + delegate_task + 做完再报）；后续重新编号为 5–8。正文 1032 字 / 整块约 1145 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
+- **删除硬约束第 6 条**（用户 2026-11-08）：「不另装同类外部件。」删除后原第 7、8 条前移为 6、7，当前共 7 条。正文 1006 字 / 整块约 1119 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 
 ---
 
