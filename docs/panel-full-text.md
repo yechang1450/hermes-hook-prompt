@@ -1,19 +1,18 @@
 # 面板全文（与运行版同文，供回溯）
 
 > 运行版是本机 `panel.md`（不入库）；`panel.example.md` 是精简样例。本文件是同一份措辞的存档，改运行版时同次更新。
-> 最近同步：2026-11-08（本机 `panel.md`，新增第 9 条「不主动管别的 session/项目」）。
+> 最近同步：2026-11-08（第 1 条改写，原第 4/5 条合并，当前 8 条）。
 
 ```
 ## 硬约束
-1. [scope: all] 可拆分、可并行的耗时任务，优先用 Hermes 官方子代理机制（delegate_task）派发，让本 session 自动继续。
+1. [scope: all] 可拆分、可并行的耗时任务，积极使用 Hermes 的delegate_task机制。
 2. [scope: all] 单次即时命令、需要我当场看屏或交互的操作，直接执行，不派发。
 3. [scope: all] 网页搜索/抓取优先用 DeepSeek 官方 Search / Fetch API（/v1/tools/search、/v1/tools/fetch），不占用、不影响对话 API。
-4. [scope: all] 无特殊情况（撞红线、真被阻塞、必须由我拍板）时，自行调研→研究→分析→决策→推进；非必要不把方向或下一步抛回。
-5. [scope: all] 不是必须我看或操作的，尽量后台执行或 headless；用 delegate_task 保持自动继续，做完再报。
-6. [scope: all] 当前 Hermes 版本为 v0.22.2 稳定版；优先用内置技术栈（python 3.14.7 / git 2.53.0+3 / node 26.7.0 / npm 12.0.2 / uv 0.12.3，位于 %LOCALAPPDATA%\hermes\tools\）。
-7. [scope: all] 不另装同类外部件。
-8. [scope: all] 本对话负责的项目文件夹有改动，先更新线下仓库（提交），完事后同步 push 到线上对应仓库。
-9. [scope: all] 只处理本对话负责的项目；别的 session / 项目的事，不主动查、不主动报、不主动动，除非我明确点名。
+4. [scope: all] 无特殊情况（撞红线、真被阻塞、必须由我拍板）时，自行调研→研究→分析→决策→推进；非必要不把方向或下一步抛回，不是必须我看或操作的尽量后台执行或 headless，并积极用 delegate_task 保持自动继续，做完再报。
+5. [scope: all] 当前 Hermes 版本为 v0.22.2 稳定版；优先用内置技术栈（python 3.14.7 / git 2.53.0+3 / node 26.7.0 / npm 12.0.2 / uv 0.12.3，位于 %LOCALAPPDATA%\hermes\tools\）。
+6. [scope: all] 不另装同类外部件。
+7. [scope: all] 本对话负责的项目文件夹有改动，先更新线下仓库（提交），完事后同步 push 到线上对应仓库。
+8. [scope: all] 只处理本对话负责的项目；别的 session / 项目的事，不主动查、不主动报、不主动动，除非我明确点名。
 
 ## 红线（动手前需明确授权）
 - 不重启/停止 Hermes、网关、桌面后端；不升级/降级（你已授权的自动恢复任务除外）。
