@@ -56,7 +56,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
-- 面板：1044 字正文 / 整块约 1157 字（上限 1600），`session_id: any`，到期 `never`（永久）
+- 面板：988 字正文 / 整块约 1101 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
@@ -181,6 +181,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - **硬约束调整**（用户 2026-11-08）：第 1 条改为「可拆分、可并行的耗时任务，积极使用 Hermes 的delegate_task机制」；原第 4、5 条合并为一条（自主推进 + 后台/headless + delegate_task + 做完再报）；后续重新编号为 5–8。正文 1032 字 / 整块约 1145 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **删除硬约束第 6 条**（用户 2026-11-08）：「不另装同类外部件。」删除后原第 7、8 条前移为 6、7，当前共 7 条。正文 1006 字 / 整块约 1119 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **红线重新分条**（用户 2026-11-08）：原 6 条混合项拆为 12 条原子项（重启/升级、SOUL/凭据/config、删数据/回滚点、历史/发布/推前自检、花钱、磁盘、别线进程、共享件），改为编号列表；语义不变。正文 1044 字 / 整块约 1157 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
+- **删除红线第 5、6 条**（用户 2026-11-08）：删除「点名的改动先留回滚点；不用备份还原覆盖已删数据」和「不改写已推历史（含 force push）」，原第 7–12 条前移为 5–10，当前红线 10 条。正文 988 字 / 整块约 1101 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 
 ---
 
