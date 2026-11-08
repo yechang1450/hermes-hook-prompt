@@ -56,7 +56,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
-- 面板：1368 字正文 / 整块约 1481 字（上限 1600），`session_id: any`，到期 `never`（永久）
+- 面板：1430 字正文 / 整块约 1543 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
@@ -187,6 +187,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - **第二轮审查收紧**（用户 2026-11-08）：硬约束 7 定义「本对话负责的项目 = 会话开始时指定的项目根（含 AGENTS.md 所在仓）」；红线 10 补「只做非破坏性修改，删除/清空/覆盖仍按红线 4」；红线 3 补 HUD 规则文件保护；红线 6 写明三项自检的判定；红线标题限定「一次授权只对本次动作有效」；硬约束 1 改为「优先只读，写任务互不写同一文件」。**force push 按用户选择保持放开**，未加回禁令。正文 1363 字 / 整块约 1476 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **精炼面板**（用户 2026-11-08）：7 条硬约束 + 10 条红线压成 6 条硬约束 + 7 条红线——合并重启/升级、删除/覆盖/共享件、发布/推前自检、他线/headless；补项目根 fallback、授权来源「当前对话明确文字、一次一件」、子代理上下文/验收；force push 保持放开。正文 1280 字 / 整块约 1393 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **修正 6 处逻辑冲突**（用户 2026-11-08）：硬 6 点名只解除查看/汇报、要操作需明确指派；红 3 改为「禁止删/清空/整体重写，共享件须授权且只做最小修改」；硬 2 补 headless 按红 7 报告；红线标题与红 1 对齐「除已点名自动恢复任务外一次一件」；硬 4 改为「目标版本 v0.22.2，例外变更后重新校验」；硬 5 项目根改为「会话指定或最近一层 git 根，不因父目录 AGENTS.md 扩大」；另补红 7「红 1 已点名的自动恢复任务除外」，避免与红 1 的长期授权冲突。正文 1368 字 / 整块约 1481 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
+- **消除实际注入冲突**（用户 2026-11-08）：红 3 放行记忆常规最小更新（只禁删/清空/整体重写），共享件只剩网关/state.db 需授权；硬 5 明确交互会话用我指定项目根、未指定用 workdir 仓库，headless/cron/subagent 只做 workdir 内且不扩到同级/父级；红 4 绝对路径自检限定本次新增/改动 diff，不追溯历史。正文 1430 字 / 整块约 1543 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 
 ---
 
