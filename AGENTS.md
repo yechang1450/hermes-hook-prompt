@@ -56,7 +56,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
-- 面板：1363 字正文 / 整块约 1476 字（上限 1600），`session_id: any`，到期 `never`（永久）
+- 面板：1280 字正文 / 整块约 1393 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
@@ -185,6 +185,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - **红线改为「禁止」话术**（用户 2026-11-08）：10 条全部改为禁止式/强制式（第 6 条改为「必须过三项自检」），语义不变。正文 1008 字 / 整块约 1121 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **按审查建议修正面板**（用户 2026-11-08）：红线标题改为「默认禁止；未经明确授权不得进行」；修掉红线 3 与红线 10 的 config 冲突、红线 5 与公开仓 push 的冲突；硬约束补子代理验收/隔离、可验证的停手条件、只暂存本任务文件、push 核对远端 HEAD、测试失败不 push；红线 3 扩到 Hermes 源码/工具目录，红线 7 改为未经预算不得产生费用，红线 10 去掉 config。正文 1335 字 / 整块约 1448 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 - **第二轮审查收紧**（用户 2026-11-08）：硬约束 7 定义「本对话负责的项目 = 会话开始时指定的项目根（含 AGENTS.md 所在仓）」；红线 10 补「只做非破坏性修改，删除/清空/覆盖仍按红线 4」；红线 3 补 HUD 规则文件保护；红线 6 写明三项自检的判定；红线标题限定「一次授权只对本次动作有效」；硬约束 1 改为「优先只读，写任务互不写同一文件」。**force push 按用户选择保持放开**，未加回禁令。正文 1363 字 / 整块约 1476 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
+- **精炼面板**（用户 2026-11-08）：7 条硬约束 + 10 条红线压成 6 条硬约束 + 7 条红线——合并重启/升级、删除/覆盖/共享件、发布/推前自检、他线/headless；补项目根 fallback、授权来源「当前对话明确文字、一次一件」、子代理上下文/验收；force push 保持放开。正文 1280 字 / 整块约 1393 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 
 ---
 
