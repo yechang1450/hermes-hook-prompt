@@ -56,7 +56,7 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 - 解释器：`%USERPROFILE%\.hud-venv\Scripts\python.exe`（用 Hermes **内置** uv 0.12.3 + 内置 python 3.14.7 建，仓库外，纯标准库不需要装包）
 - 命令：`%USERPROFILE%/.hud-venv/Scripts/python.exe <repo>/hud_inject.py`，`timeout: 10`
 - allowlist：已批准（`approved_at 2026-11-05T17:06:36Z`）
-- 面板：1000 字正文 / 整块约 1113 字（上限 1600），`session_id: any`，到期 `never`（永久）
+- 面板：1070 字正文 / 整块约 1183 字（上限 1600），`session_id: any`，到期 `never`（永久）
 - 自检 7/7、`hooks doctor` 四项绿、单元测试 **240** 例（11 跳过）全绿
 
 ---
@@ -174,6 +174,10 @@ tail -3 hud.log        # 应出现 inject session=… chars=… entries=k/n
 
 - **调研文档归置**：按工作区约定，把 `docs/PATROL-DESIGN.md` 移出仓库到 `workspace/temp/hermes-hook-prompt-patrol/PATROL-DESIGN.md`；仓库当前树不再含调研文档（历史提交仍含；要彻底抹除需重写已推历史，未获「执行 A」授权，不做）。本次删除提交并 push。
 - **回滚巡查 Phase 0**：按用户 2026-11-07 指示，撤销 `01923d2`——删除 `patrol_guard.py` / `patrol_rules.json` / `tests/test_patrol_guard.py`，README / AGENTS 恢复 240 例口径；**config、hooks、panel 均未动**，HUD 仍是原来的 `pre_llm_call` 被动注入。未 force push、未改写历史。
+
+### 2026-11-08
+
+- **硬约束新增第 9 条**（用户 2026-11-08 口径）：「只处理本对话负责的项目；别的 session / 项目的事，不主动查、不主动报、不主动动，除非我明确点名。」`hudctl set --ttl never`，正文 1070 字 / 整块约 1183 字，`check` 绿；`docs/panel-full-text.md` 同步；提交并 push。
 
 ---
 
